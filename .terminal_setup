@@ -1,0 +1,55 @@
+#!/bin/bash
+
+# スクリプトリーダー with VOICEVOX のセットアップスクリプト
+
+echo "スクリプトリーダー with VOICEVOX セットアップを開始します..."
+
+# Python環境の確認
+if ! command -v python3 &> /dev/null
+then
+    echo "Python 3 がインストールされていません。インストールしてください。"
+    exit 1
+fi
+
+# 必要なライブラリのインストール
+echo "必要なライブラリをインストールしています..."
+pip3 install requests
+
+# gTTS（オプション）
+read -p "Google Text-to-Speechを使用しますか？(y/n): " use_gtts
+if [ "$use_gtts" = "y" ]; then
+    pip3 install gtts
+    echo "gTTSをインストールしました。"
+else
+    echo "gTTSはインストールしません。"
+fi
+
+# VOICEVOXの確認
+read -p "VOICEVOXはインストールされていますか？(y/n): " has_voicevox
+if [ "$has_voicevox" = "y" ]; then
+    echo "VOICEVOXが使用可能です。使用前にVOICEVOXエディタを起動してください。"
+else
+    echo "VOICEVOXを使用する場合は、以下のURLからダウンロードしてインストールしてください:"
+    echo "https://voicevox.hiroshiba.jp/"
+fi
+
+echo "セットアップが完了しました。"
+echo "スクリプトリーダーを起動するには:"
+echo "python3 script_reader.py"
+
+# Gitリポジトリの初期化（オプション）
+read -p "Gitリポジトリを初期化しますか？(y/n): " init_git
+if [ "$init_git" = "y" ]; then
+    git init
+    echo ".DS_Store" > .gitignore
+    echo "__pycache__/" >> .gitignore
+    echo "*.pyc" >> .gitignore
+    echo "*.pyo" >> .gitignore
+    echo "temp_*.mp3" >> .gitignore
+    echo "temp_*.wav" >> .gitignore
+    git add .
+    git commit -m "初期コミット: スクリプトリーダー with VOICEVOX"
+    echo "Gitリポジトリを初期化しました。"
+fi
+
+echo "すべての設定が完了しました！"
