@@ -1,1 +1,53 @@
+# Python関連
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 仮想環境
+venv/
+ENV/
+.env
+
+# macOS関連
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# エディタ関連
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 一時ファイル
+*.tmp
+temp/
+tmp/
+
+# 音声ファイル
+*.mp3
+*.wav
+
+# ログファイル
+*.log
+
+# Claudeの設定ファイル
 **/.claude/settings.local.json
