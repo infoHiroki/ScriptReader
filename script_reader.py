@@ -96,7 +96,7 @@ class SimpleScriptReader:
         
         # 読み上げ設定
         self.speech_rate = 220  # 高速に設定 (sayコマンド用レート)
-        self.pause_time = 0.15  # 改行間のポーズ時間を短く
+        self.pause_time = 0.08  # 改行間のポーズ時間をより短く
         self.min_rate = 100     # 最小読み上げ速度
         self.max_rate = 660     # 最大読み上げ速度（VOICEVOXで3倍速まで対応）
         
