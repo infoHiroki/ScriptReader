@@ -98,7 +98,7 @@ class SimpleScriptReader:
         self.speech_rate = 220  # 高速に設定 (sayコマンド用レート)
         self.pause_time = 0.15  # 改行間のポーズ時間を短く
         self.min_rate = 100     # 最小読み上げ速度
-        self.max_rate = 300     # 最大読み上げ速度
+        self.max_rate = 660     # 最大読み上げ速度（VOICEVOXで3倍速まで対応）
         
         # 音声合成エンジンの設定
         self.use_gtts = False   # Google TTS
@@ -429,6 +429,14 @@ class SimpleScriptReader:
                 params={'text': text, 'speaker': self.voicevox_speaker}
             )
             query = query_response.json()
+            
+            # 速度を設定（speech_rateから適切な比率に変換）
+            # 標準速度（220WPM）との比率を計算
+            speed_ratio = self.speech_rate / 220.0
+            # 範囲を拡大（0.5～3.0）してより速い再生をサポート
+            speed_scale = max(0.5, min(3.0, speed_ratio))
+            query['speedScale'] = speed_scale
+            print(f"VOICEVOX読み上げ速度: {self.speech_rate}WPM (speedScale: {speed_scale:.2f})")
             
             # 音声合成実行
             synthesis_response = requests.post(
