@@ -542,23 +542,26 @@ class SimpleScriptReader:
         selected_speaker = self.speaker_var.get()
         self.voicevox_speaker = VOICEVOX_SPEAKERS[selected_speaker]
         self.speaker_info_label.config(text=f"ID: {self.voicevox_speaker}")
-        print(f"VOICEVOX話者を {selected_speaker} (ID: {self.voicevox_speaker}) に変更しました")
+        log_message(f"VOICEVOX話者を {selected_speaker} (ID: {self.voicevox_speaker}) に変更しました", 
+                  level="INFO", prefix="VOICEVOX")
         
         # 話者を変更した場合、現在のスライドの音声キャッシュをクリア
         if self.current_slide in self.audio_cache:
             try:
                 if os.path.exists(self.audio_cache[self.current_slide]):
                     os.unlink(self.audio_cache[self.current_slide])
-                    print(f"話者変更により音声キャッシュを削除: {self.audio_cache[self.current_slide]}")
+                    log_message(f"話者変更により音声キャッシュを削除: {self.audio_cache[self.current_slide]}", 
+                             level="INFO", prefix="キャッシュ")
             except Exception as e:
-                print(f"キャッシュ削除エラー: {e}")
+                log_message(f"キャッシュ削除エラー: {e}", level="ERROR", prefix="キャッシュ")
             
             # キャッシュ情報をリセット
             self.audio_cache.pop(self.current_slide, None)
             self.is_loaded.pop(self.current_slide, None)
             
-            # 自動的に音声を再読み込み
-            self.start_audio_preload()
+            # 音声の読み込みが必要であることを表示
+            self.status_label.config(text="話者を変更しました。音声の再読み込みが必要です")
+            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生")
     
     def show_slide(self):
         """現在のスライドを表示"""
@@ -1195,10 +1198,12 @@ class SimpleScriptReader:
                         selected_speaker = self.speaker_var.get()
                         engine_name = f"VOICEVOX ({selected_speaker})"
                     else:
-                        print("VOICEVOXエンジンに接続できません。起動しているか確認してください。")
+                        log_message("VOICEVOXエンジンに接続できません。起動しているか確認してください。", 
+                                  level="WARN", prefix="エンジン変更")
                         engine_name = "macOS say (フォールバック)"
                 else:
-                    print("VOICEVOXエンジンに接続できません。起動しているか確認してください。")
+                    log_message("VOICEVOXエンジンに接続できません。起動しているか確認してください。", 
+                              level="WARN", prefix="エンジン変更")
                     engine_name = "macOS say (フォールバック)"
         else:
             engine_name = "macOS say"
@@ -1209,23 +1214,24 @@ class SimpleScriptReader:
         self.voicevox_btn.config(bg=self.accent_blue if self.use_voicevox else self.btn_bg)
         
         self.status_label.config(text=f"音声エンジンを {engine_name} に切り替えました")
-        print(f"音声エンジンを {engine_name} に切り替えました")
+        log_message(f"音声エンジンを {engine_name} に切り替えました", level="INFO", prefix="エンジン変更")
         
         # エンジンを変更した場合、現在のスライドの音声キャッシュをクリア
         if self.current_slide in self.audio_cache:
             try:
                 if os.path.exists(self.audio_cache[self.current_slide]):
                     os.unlink(self.audio_cache[self.current_slide])
-                    print(f"エンジン変更により音声キャッシュを削除: {self.audio_cache[self.current_slide]}")
+                    log_message(f"エンジン変更により音声キャッシュを削除: {self.audio_cache[self.current_slide]}", 
+                              level="INFO", prefix="キャッシュ")
             except Exception as e:
-                print(f"キャッシュ削除エラー: {e}")
+                log_message(f"キャッシュ削除エラー: {e}", level="ERROR", prefix="キャッシュ")
             
             # キャッシュ情報をリセット
             self.audio_cache.pop(self.current_slide, None)
             self.is_loaded.pop(self.current_slide, None)
             
-            # 自動的に音声を再読み込み
-            self.start_audio_preload()
+            # 音声の読み込みが必要であることを表示
+            self.status_label.config(text=f"音声エンジンを {engine_name} に切り替えました。音声の再読み込みが必要です")
         
     def _speak_text(self, text):
         """テキストを音声で読み上げるバックグラウンド処理"""
