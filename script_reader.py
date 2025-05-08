@@ -470,7 +470,7 @@ class SimpleScriptReader:
         self.next_btn.pack(side=tk.LEFT, padx=5)
         
         # 音声再生ボタン
-        self.speak_btn = Button(control_frame, text="音声再生", command=self.speak_slide, 
+        self.speak_btn = Button(control_frame, text="▶ 音声再生", command=self.speak_slide, 
                                font=("Helvetica", 12), bg=self.accent_green, fg="black")
         self.speak_btn.pack(side=tk.LEFT, padx=5)
         
@@ -479,9 +479,10 @@ class SimpleScriptReader:
                               font=("Helvetica", 12), bg=self.accent_red, fg="black")
         self.stop_btn.pack(side=tk.LEFT, padx=5)
         
-        # 音声読み込みボタン（手動読み込み用） - より目立たせる、ショートカットキー表示
+        # 音声読み込みボタン（手動読み込み用） - 重要なボタンなのでさらに目立たせる
         self.load_audio_btn = Button(control_frame, text="音声読み込み (B) ⬇", command=self.start_audio_preload, 
-                                  font=("Helvetica", 12, "bold"), bg=self.accent_blue, fg="black")
+                                  font=("Helvetica", 12, "bold"), bg="#FF9800", fg="black",
+                                  relief=tk.RAISED, borderwidth=3)
         self.load_audio_btn.pack(side=tk.LEFT, padx=8)
         
         # ファイルを開くボタン
@@ -696,7 +697,8 @@ class SimpleScriptReader:
             
             # 音声の読み込みが必要であることを表示
             self.status_label.config(text="話者を変更しました。音声の再読み込みが必要です")
-            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生")
+            # 再生ボタンをグレーアウト
+            self.speak_btn.config(bg="#cccccc", fg="black", text="音声未読込", state=tk.DISABLED)
     
     def show_slide(self):
         """現在のスライドを表示"""
@@ -719,12 +721,20 @@ class SimpleScriptReader:
         # 古いキャッシュを整理
         self._clean_other_caches()
         
-        # 音声が既に読み込まれている場合はボタンの表示を更新
+        # 現在のスライドインデックス
         current_idx = self.current_slide
+        
+        # 音声が既に読み込まれている場合はボタンの表示を更新
         if current_idx in self.is_loaded and self.is_loaded[current_idx]:
-            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶")
+            self.speak_btn.config(bg=self.accent_green, fg="black", text="▶ 音声再生", state=tk.NORMAL)
             self.status_label.config(text="音声は読み込み済みです")
             log_message(f"スライド {current_idx+1}/{len(self.slides)} は既に読み込み済みです", 
+                      level="INFO", prefix="音声読み込み")
+        else:
+            # 音声が読み込まれていない場合は再生ボタンをグレーアウト
+            self.speak_btn.config(bg="#cccccc", fg="black", text="音声未読込", state=tk.DISABLED)
+            self.status_label.config(text="「音声読み込み」ボタンを押して音声を準備してください")
+            log_message(f"スライド {current_idx+1}/{len(self.slides)} の音声は未読み込みです", 
                       level="INFO", prefix="音声読み込み")
         
     def next_slide(self):
@@ -767,7 +777,7 @@ class SimpleScriptReader:
         # キャッシュされた音声がある場合のみ再生
         if current_idx in self.audio_cache and os.path.exists(self.audio_cache[current_idx]):
             self.is_speaking = True
-            self.speak_btn.config(text="再生中...", state=tk.DISABLED)
+            self.speak_btn.config(text="⏸ 再生中...", state=tk.DISABLED)
             
             # 音声ファイルを再生
             audio_file = self.audio_cache[current_idx]
@@ -817,7 +827,7 @@ class SimpleScriptReader:
             self.root.after(0, self._reset_speak_button)
     
     def start_audio_preload(self):
-        """現在のスライドの音声読み込みをバックグラウンドで開始"""
+        """現在のスライドの音声読み込みを開始"""
         # すでに読み込み済みの場合はスキップ
         current_idx = self.current_slide
         if current_idx in self.is_loaded and self.is_loaded[current_idx]:
@@ -828,9 +838,9 @@ class SimpleScriptReader:
             self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶", state=tk.NORMAL)
             return
             
-        # 読み込み中の場合はスキップ
+        # 読み込み中の場合はスキップ (安全のため残しておく)
         if current_idx in self.is_loading and self.is_loading[current_idx]:
-            self.status_label.config(text="音声読み込み中...")
+            self.status_label.config(text="音声読み込み中です...")
             log_message(f"スライド {current_idx+1}/{len(self.slides)} の音声を読み込み中です", 
                       level="INFO", prefix="音声読み込み")
             return
@@ -838,7 +848,7 @@ class SimpleScriptReader:
         # エンジン種別を取得
         engine_type = "VOICEVOX" if self.use_voicevox else "Google TTS" if self.use_gtts else "macOS say"
         
-        # 読み込み中表示（さらに詳細な情報を追加）
+        # 読み込み中表示（詳細情報を含める）
         self.is_loading[current_idx] = True
         load_message = f"音声を読み込んでいます... ({engine_type}, {self.speech_rate}WPM)"
         
@@ -849,10 +859,8 @@ class SimpleScriptReader:
         
         self.status_label.config(text=load_message)
         
-        # プログレス表示をアニメーションに
+        # 進行状況表示
         self.progress_var.set("⏳")
-        # アニメーションを開始
-        self._start_progress_animation(current_idx)
         
         # 読み込み中は再生ボタンを無効化
         self.speak_btn.config(state=tk.DISABLED)
@@ -863,13 +871,106 @@ class SimpleScriptReader:
         log_message(f"使用エンジン: {engine_type}, 速度: {self.speech_rate}WPM", 
                   level="DEBUG", prefix="音声読み込み")
         
-        # スレッドで音声読み込みを実行
-        thread = threading.Thread(target=self._load_audio_thread, args=(current_idx,))
-        thread.daemon = True
-        thread.start()
+        # UI更新を反映するために一度処理を譲る
+        self.root.update()
+        
+        try:
+            # 音声読み込み処理をメインスレッドで実行 (UIブロックするが、スレッド競合を防ぐ)
+            self._load_audio_synchronous(current_idx)
+        except Exception as e:
+            log_message(f"音声読み込みエラー: {e}", level="ERROR", prefix="音声読み込み")
+            import traceback
+            traceback.print_exc()
+            self.is_loading[current_idx] = False
+            self._update_load_status(False, f"エラー: {str(e)}")
     
+    def _load_audio_synchronous(self, slide_idx):
+        """同期的に音声を読み込む（スレッドを使わずにメインスレッドで実行）"""
+        # スライドのテキストを取得
+        text = self.slides[slide_idx]
+        
+        # テキスト処理
+        lines = self._process_text_for_speech(text)
+        combined_text = " ".join([l for l in lines if l.strip()])
+        
+        # スライドIDのプレフィックス
+        slide_prefix = f"スライド{slide_idx+1}/{len(self.slides)}"
+        
+        log_message(f"処理テキスト: {len(combined_text)}文字, {len(lines)}行", 
+                  level="DEBUG", prefix=slide_prefix)
+        
+        if not combined_text:
+            # テキストが空の場合は何もしない
+            self.is_loading[slide_idx] = False
+            log_message("テキストが空のため読み込みをスキップします", level="WARN", prefix=slide_prefix)
+            self._update_load_status(False, "テキストが空です")
+            return
+            
+        # 選択した音声エンジンに応じて処理
+        # VOICEVOXの場合、必要に応じて起動
+        if self.use_voicevox:
+            if self.auto_start_voicevox.get() == 1 and not is_voicevox_engine_running():
+                log_message("VOICEVOXエンジンの自動起動を試みます", level="INFO", prefix=slide_prefix)
+                self.status_label.config(text="VOICEVOXエンジンを起動中...")
+                self.root.update()  # UI更新を反映
+                
+                if not start_voicevox_engine():
+                    self.is_loading[slide_idx] = False
+                    log_message("VOICEVOXエンジンの起動に失敗しました", level="ERROR", prefix=slide_prefix)
+                    self._update_load_status(False, "VOICEVOXエンジンを起動できません")
+                    return
+                else:
+                    log_message("VOICEVOXエンジンの起動に成功しました", level="SUCCESS", prefix=slide_prefix)
+        
+        # 音声ファイル生成
+        temp_file = None
+        
+        # ファイル生成開始ログ
+        engine_type = "VOICEVOX" if self.use_voicevox and is_voicevox_engine_running() else "Google TTS" if self.use_gtts and GTTS_AVAILABLE else "macOS say"
+        log_message(f"{engine_type}で音声ファイル生成を開始します", level="INFO", prefix=slide_prefix)
+        
+        # 状態更新
+        self.status_label.config(text=f"{engine_type}で音声を生成中...")
+        self.root.update()  # UI更新を反映
+        
+        if self.use_voicevox and is_voicevox_engine_running():
+            # VOICEVOXで音声ファイル生成
+            temp_file = self._generate_voicevox_audio(combined_text)
+        elif self.use_gtts and GTTS_AVAILABLE:
+            # Google TTSで音声ファイル生成
+            temp_file = self._generate_gtts_audio(combined_text)
+        else:
+            # macOSのsayコマンドで音声ファイル生成
+            temp_file = self._generate_say_audio(combined_text)
+        
+        if temp_file:
+            # 既存のキャッシュがあれば削除
+            if slide_idx in self.audio_cache and os.path.exists(self.audio_cache[slide_idx]):
+                try:
+                    os.unlink(self.audio_cache[slide_idx])
+                    log_message(f"既存のキャッシュファイルを削除しました: {self.audio_cache[slide_idx]}", 
+                              level="DEBUG", prefix=slide_prefix)
+                except Exception as e:
+                    log_message(f"キャッシュファイル削除エラー: {e}", level="WARN", prefix=slide_prefix)
+            
+            # キャッシュに保存
+            self.audio_cache[slide_idx] = temp_file
+            self.is_loaded[slide_idx] = True
+            self.is_loading[slide_idx] = False
+            
+            file_size = os.path.getsize(temp_file) / 1024  # KB単位
+            log_message(f"音声ファイル生成完了: {temp_file} ({file_size:.1f}KB)", 
+                      level="SUCCESS", prefix=slide_prefix)
+            
+            # 成功ステータスを更新
+            self._update_load_status(True)
+        else:
+            self.is_loading[slide_idx] = False
+            log_message("音声ファイル生成に失敗しました", level="ERROR", prefix=slide_prefix)
+            self._update_load_status(False, "音声合成に失敗しました")
+
     def _load_audio_thread(self, slide_idx, is_current=True):
-        """バックグラウンドで音声を読み込む"""
+        """バックグラウンドで音声を読み込む（互換性のために残す）"""
         try:
             # スライドのテキストを取得
             text = self.slides[slide_idx]
@@ -957,7 +1058,7 @@ class SimpleScriptReader:
                 self.root.after(0, lambda: self._update_load_status(False, f"エラー: {str(e)}"))
     
     def _update_load_status(self, success, message=None):
-        """読み込み状態とステータスを更新する"""
+        """読み込み状態とステータスを更新する（同期的に実行）"""
         try:
             current_idx = self.current_slide
             slide_info = f"スライド {current_idx+1}/{len(self.slides)}"
@@ -985,10 +1086,15 @@ class SimpleScriptReader:
                     speaker_name = self.speaker_var.get()
                     success_msg = f"音声の読み込みが完了しました - {engine_type}, {speaker_name} {file_info}"
                 
+                # 直接UI更新（同期的な処理のため）
                 self.status_label.config(text=success_msg)
                 self.progress_var.set("✅")  # 完了マーク
-                self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶", state=tk.NORMAL)
-                # 数秒後に進捗表示を消す
+                self.speak_btn.config(bg=self.accent_green, fg="black", text="▶ 音声再生", state=tk.NORMAL)
+                
+                # UIを更新
+                self.root.update()
+                
+                # 数秒後に進捗表示を消す（タイマーはそのまま使用）
                 self.root.after(3000, self._clear_progress_var_safe)
             else:
                 error_msg = message or "音声の読み込みに失敗しました"
@@ -1003,11 +1109,15 @@ class SimpleScriptReader:
                     engine_status = "起動中" if is_voicevox_engine_running() else "停止中"
                     log_message(f"VOICEVOXエンジン状態: {engine_status}", level="DEBUG", prefix="詳細情報")
                 
-                # UI表示を更新
+                # UI表示を更新（直接更新）
                 self.status_label.config(text=error_msg)
                 self.progress_var.set("❌")  # エラーマーク
                 # 再生ボタンを標準状態に戻して有効化
                 self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生", state=tk.NORMAL)
+                
+                # UIを更新
+                self.root.update()
+                
                 # 数秒後に進捗表示を消す
                 self.root.after(3000, self._clear_progress_var_safe)
         except Exception as e:
@@ -1019,43 +1129,15 @@ class SimpleScriptReader:
                 self.status_label.config(text="ステータス更新中にエラーが発生しました")
                 self.progress_var.set("⚠️")  # 警告マーク
                 self.speak_btn.config(state=tk.NORMAL)
+                # UIを更新
+                self.root.update()
                 # 数秒後に進捗表示を消す
                 self.root.after(5000, self._clear_progress_var_safe)
             except:
                 pass  # この時点でさらにエラーが発生しても無視
     
-    def _start_progress_animation(self, slide_idx):
-        """読み込み中のプログレスアニメーションを開始する"""
-        # アニメーション用のイメージリスト
-        animation_frames = ["⏳", "🔄", "🔄", "🔄"]
-        self._animate_progress(slide_idx, animation_frames, 0)
-    
-    def _animate_progress(self, slide_idx, frames, frame_index):
-        """プログレスアニメーションのフレームを更新する"""
-        try:
-            # すでに読み込みが完了している、またはウィジェットが破棄されている場合は何もしない
-            if not self.root or not self.root.winfo_exists():
-                return
-                
-            if slide_idx not in self.is_loading or not self.is_loading[slide_idx]:
-                return  # 読み込みが終了していたら何もしない
-            
-            # フレームを更新
-            current_frame = frames[frame_index]
-            self.progress_var.set(current_frame)
-            
-            # 次のフレームのインデックスを計算
-            next_frame = (frame_index + 1) % len(frames)
-            
-            # 0.3秒後に次のフレームを表示
-            self.root.after(300, lambda: self._animate_progress(slide_idx, frames, next_frame))
-        except Exception as e:
-            # エラーが発生した場合は静的なアイコンに戻す
-            log_message(f"アニメーションエラー: {e}", level="ERROR", prefix="UI")
-            try:
-                self.progress_var.set("🔄")  # 静的なアイコン
-            except:
-                pass
+    # アニメーション関連のメソッドを削除（同期的な処理に変更したため不要）
+    # アニメーションが必要な場合は、別の方法で実装
     
     
     def _clean_other_caches(self):
@@ -1396,6 +1478,8 @@ class SimpleScriptReader:
             
             # 音声の読み込みが必要であることを表示
             self.status_label.config(text=f"音声エンジンを {engine_name} に切り替えました。音声の再読み込みが必要です")
+            # 再生ボタンをグレーアウト
+            self.speak_btn.config(bg="#cccccc", fg="black", text="音声未読込", state=tk.DISABLED)
         
     def _speak_text(self, text):
         """テキストを音声で読み上げるバックグラウンド処理"""
@@ -1509,6 +1593,8 @@ class SimpleScriptReader:
             
             # 音声の読み込みが必要であることを表示
             self.status_label.config(text=f"速度を {self.speech_rate} WPM に変更しました。音声の再読み込みが必要です")
+            # 再生ボタンをグレーアウト
+            self.speak_btn.config(bg="#cccccc", fg="black", text="音声未読込", state=tk.DISABLED)
     
     def increase_speed(self):
         """読み上げ速度を上げる（上矢印キー用）"""
@@ -1522,8 +1608,16 @@ class SimpleScriptReader:
     
     def _reset_speak_button(self):
         """音声再生ボタンをリセット"""
-        # UI要素だけを更新（is_speakingフラグやspeak_processはstop_speaking内で処理）
-        self.speak_btn.config(text="音声再生", state=tk.NORMAL)
+        # 現在のスライドインデックス
+        current_idx = self.current_slide
+        
+        # 音声が読み込み済みかどうかで表示を変える
+        if current_idx in self.is_loaded and self.is_loaded[current_idx]:
+            # 読み込み済みの場合は再生可能に
+            self.speak_btn.config(text="▶ 音声再生", state=tk.NORMAL, bg=self.accent_green)
+        else:
+            # 未読み込みの場合はグレーアウト
+            self.speak_btn.config(text="音声未読込", state=tk.DISABLED, bg="#cccccc")
     
     def stop_speaking(self):
         """音声再生を停止"""
