@@ -225,12 +225,17 @@ class SimpleScriptReader:
         
         # 音声合成エンジンの設定
         self.use_gtts = False   # Google TTS
-        self.use_voicevox = False  # VOICEVOX
+        self.use_voicevox = True  # デフォルトでVOICEVOXを使用
         self.voicevox_speaker = 1  # デフォルト話者ID
         self.voicevox_url = VOICEVOX_URL  # VOICEVOXエンジンのURL
         
         # VOICEVOXの自動起動設定
         self.auto_start_voicevox = IntVar(value=1)  # デフォルトで有効
+        
+        # 音声キャッシュ用の辞書
+        self.audio_cache = {}  # キー: スライドインデックス, 値: 一時ファイルパス
+        self.is_loading = {}   # キー: スライドインデックス, 値: True/False（読み込み中か）
+        self.is_loaded = {}    # キー: スライドインデックス, 値: True/False（ロード済みか）
         
         # ルートウィンドウの背景色設定
         self.root.configure(bg=self.bg_color)
@@ -342,6 +347,11 @@ class SimpleScriptReader:
         self.stop_btn = Button(control_frame, text="停止", command=self.stop_speaking, 
                               font=("Helvetica", 12), bg=self.accent_red, fg="black")
         self.stop_btn.pack(side=tk.LEFT, padx=5)
+        
+        # 音声読み込みボタン（手動読み込み用）
+        self.load_audio_btn = Button(control_frame, text="音声読み込み", command=self.start_audio_preload, 
+                                  font=("Helvetica", 12), bg=self.accent_blue, fg="black")
+        self.load_audio_btn.pack(side=tk.LEFT, padx=5)
         
         # ファイルを開くボタン
         self.open_btn = Button(control_frame, text="ファイルを開く", command=self.open_file, 
@@ -458,10 +468,22 @@ class SimpleScriptReader:
                                      bg=self.accent_green, fg="black")
         self.start_voicevox_btn.pack(side=tk.LEFT, padx=5)
         
-        # ステータス表示ラベル (新規追加)
-        self.status_label = Label(self.root, text="", font=("Helvetica", 11),
+        # ステータスフレーム
+        status_frame = Frame(self.root, bg=self.bg_color)
+        status_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # ステータス表示ラベル
+        self.status_label = Label(status_frame, text="", font=("Helvetica", 11),
                                bg=self.bg_color, fg=self.text_fg_color)
-        self.status_label.pack(padx=10, pady=5)
+        self.status_label.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # 読み込み進捗インジケーター
+        self.progress_var = StringVar()
+        self.progress_var.set("")  # 最初は非表示
+        self.progress_label = Label(status_frame, textvariable=self.progress_var, 
+                                  font=("Helvetica", 11),
+                                  bg=self.bg_color, fg=self.accent_green)
+        self.progress_label.pack(side=tk.RIGHT, padx=5)
         
         # 初期話者を設定
         self.change_speaker()
@@ -494,6 +516,22 @@ class SimpleScriptReader:
         self.voicevox_speaker = VOICEVOX_SPEAKERS[selected_speaker]
         self.speaker_info_label.config(text=f"ID: {self.voicevox_speaker}")
         print(f"VOICEVOX話者を {selected_speaker} (ID: {self.voicevox_speaker}) に変更しました")
+        
+        # 話者を変更した場合、現在のスライドの音声キャッシュをクリア
+        if self.current_slide in self.audio_cache:
+            try:
+                if os.path.exists(self.audio_cache[self.current_slide]):
+                    os.unlink(self.audio_cache[self.current_slide])
+                    print(f"話者変更により音声キャッシュを削除: {self.audio_cache[self.current_slide]}")
+            except Exception as e:
+                print(f"キャッシュ削除エラー: {e}")
+            
+            # キャッシュ情報をリセット
+            self.audio_cache.pop(self.current_slide, None)
+            self.is_loaded.pop(self.current_slide, None)
+            
+            # 自動的に音声を再読み込み
+            self.start_audio_preload()
     
     def show_slide(self):
         """現在のスライドを表示"""
@@ -512,6 +550,9 @@ class SimpleScriptReader:
         # ボタンの有効/無効状態を更新
         self.prev_btn.config(state=tk.NORMAL if self.current_slide > 0 else tk.DISABLED)
         self.next_btn.config(state=tk.NORMAL if self.current_slide < len(self.slides) - 1 else tk.DISABLED)
+        
+        # 音声の自動読み込みを開始
+        self.start_audio_preload()
         
     def next_slide(self):
         """次のスライドへ移動"""
@@ -536,21 +577,268 @@ class SimpleScriptReader:
         if not self.slides:
             return
             
-        self.is_speaking = True
-        self.speak_btn.config(text="再生中...", state=tk.DISABLED)
+        current_idx = self.current_slide
         
-        # スライドのテキストを取得
-        text = self.slides[self.current_slide]
-        print(f"音声再生開始: {len(text)}文字")
+        # キャッシュされた音声がある場合はそれを使用
+        if current_idx in self.audio_cache and os.path.exists(self.audio_cache[current_idx]):
+            self.is_speaking = True
+            self.speak_btn.config(text="再生中...", state=tk.DISABLED)
+            
+            # 音声ファイルを再生
+            audio_file = self.audio_cache[current_idx]
+            print(f"キャッシュから音声再生: {audio_file}")
+            
+            # スレッドで再生
+            self.speak_thread = threading.Thread(target=self._play_cached_audio, args=(audio_file,))
+            self.speak_thread.daemon = True
+            self.speak_thread.start()
+        else:
+            # キャッシュがない場合は従来の方法で再生
+            # 読み込みを強調するメッセージを表示
+            if current_idx in self.is_loading and self.is_loading[current_idx]:
+                self.status_label.config(text="音声読み込み中です。しばらくお待ちください...")
+            else:
+                self.status_label.config(text="音声は読み込まれていません。通常再生に切り替えます...")
+            
+            # 通常の再生処理を実行
+            self.is_speaking = True
+            self.speak_btn.config(text="再生中...", state=tk.DISABLED)
+            
+            # スライドのテキストを取得
+            text = self.slides[self.current_slide]
+            print(f"音声再生開始: {len(text)}文字")
+            
+            # VOICEVOXを使う場合、起動しているか確認し必要に応じて起動
+            if self.use_voicevox and self.auto_start_voicevox.get() == 1:
+                self.start_voicevox_if_needed()
+            
+            # スレッドで音声再生を実行
+            self.speak_thread = threading.Thread(target=self._speak_text, args=(text,))
+            self.speak_thread.daemon = True
+            self.speak_thread.start()
+    
+    def _play_cached_audio(self, audio_file):
+        """キャッシュされた音声ファイルを再生する"""
+        try:
+            # 再生プロセスを開始
+            self.speak_process = subprocess.Popen(['afplay', audio_file])
+            
+            # プロセスが終了するまで待機
+            while self.is_speaking and self.speak_process.poll() is None:
+                time.sleep(0.01)
+                
+            print("キャッシュ音声の再生が完了しました")
+        except Exception as e:
+            print(f"キャッシュ音声再生エラー: {e}")
+        finally:
+            # UI更新
+            self.root.after(0, self._reset_speak_button)
+    
+    def start_audio_preload(self):
+        """現在のスライドの音声読み込みをバックグラウンドで開始"""
+        # すでに読み込み済みの場合はスキップ
+        current_idx = self.current_slide
+        if current_idx in self.is_loaded and self.is_loaded[current_idx]:
+            self.status_label.config(text="音声は読み込み済みです")
+            return
+            
+        # 読み込み中の場合はスキップ
+        if current_idx in self.is_loading and self.is_loading[current_idx]:
+            self.status_label.config(text="音声読み込み中...")
+            return
+            
+        # 読み込み中表示
+        self.is_loading[current_idx] = True
+        self.status_label.config(text="音声を読み込んでいます...")
+        self.progress_var.set("🔄")
         
-        # VOICEVOXを使う場合、起動しているか確認し必要に応じて起動
-        if self.use_voicevox and self.auto_start_voicevox.get() == 1:
-            self.start_voicevox_if_needed()
+        # スレッドで音声読み込みを実行
+        thread = threading.Thread(target=self._load_audio_thread, args=(current_idx,))
+        thread.daemon = True
+        thread.start()
         
-        # スレッドで音声再生を実行
-        self.speak_thread = threading.Thread(target=self._speak_text, args=(text,))
-        self.speak_thread.daemon = True
-        self.speak_thread.start()
+        # 次のスライドも事前読み込み（優先度低）
+        next_idx = current_idx + 1
+        if next_idx < len(self.slides) and (next_idx not in self.is_loaded or not self.is_loaded[next_idx]) and (next_idx not in self.is_loading):
+            # 少し遅延させて現在のスライドを優先
+            self.root.after(2000, lambda: self._preload_next_slide(next_idx))
+    
+    def _preload_next_slide(self, slide_idx):
+        """次のスライドを事前読み込み"""
+        if slide_idx in self.is_loading or slide_idx in self.is_loaded:
+            return
+            
+        self.is_loading[slide_idx] = True
+        thread = threading.Thread(target=self._load_audio_thread, args=(slide_idx, False))
+        thread.daemon = True
+        thread.start()
+    
+    def _load_audio_thread(self, slide_idx, is_current=True):
+        """バックグラウンドで音声を読み込む"""
+        try:
+            # スライドのテキストを取得
+            text = self.slides[slide_idx]
+            
+            # テキスト処理
+            lines = self._process_text_for_speech(text)
+            combined_text = " ".join([l for l in lines if l.strip()])
+            
+            if not combined_text:
+                # テキストが空の場合は何もしない
+                self.is_loading[slide_idx] = False
+                if is_current:
+                    self.root.after(0, lambda: self._update_load_status(False, "テキストが空です"))
+                return
+                
+            # 選択した音声エンジンに応じて処理
+            # VOICEVOXの場合、必要に応じて起動
+            if self.use_voicevox:
+                if self.auto_start_voicevox.get() == 1 and not is_voicevox_engine_running():
+                    if not start_voicevox_engine():
+                        self.is_loading[slide_idx] = False
+                        if is_current:
+                            self.root.after(0, lambda: self._update_load_status(False, "VOICEVOXエンジンを起動できません"))
+                        return
+            
+            # 音声ファイル生成
+            temp_file = None
+            
+            if self.use_voicevox and is_voicevox_engine_running():
+                # VOICEVOXで音声ファイル生成
+                temp_file = self._generate_voicevox_audio(combined_text)
+            elif self.use_gtts and GTTS_AVAILABLE:
+                # Google TTSで音声ファイル生成
+                temp_file = self._generate_gtts_audio(combined_text)
+            else:
+                # macOSのsayコマンドで音声ファイル生成
+                temp_file = self._generate_say_audio(combined_text)
+            
+            if temp_file:
+                # キャッシュに保存
+                if slide_idx in self.audio_cache and os.path.exists(self.audio_cache[slide_idx]):
+                    try:
+                        os.unlink(self.audio_cache[slide_idx])
+                    except:
+                        pass
+                
+                self.audio_cache[slide_idx] = temp_file
+                self.is_loaded[slide_idx] = True
+                self.is_loading[slide_idx] = False
+                
+                if is_current:
+                    self.root.after(0, lambda: self._update_load_status(True))
+            else:
+                self.is_loading[slide_idx] = False
+                if is_current:
+                    self.root.after(0, lambda: self._update_load_status(False, "音声合成に失敗しました"))
+        except Exception as e:
+            print(f"音声読み込みエラー: {e}")
+            self.is_loading[slide_idx] = False
+            if is_current:
+                self.root.after(0, lambda: self._update_load_status(False, f"エラー: {str(e)}"))
+    
+    def _update_load_status(self, success, message=None):
+        """読み込み状態とステータスを更新する"""
+        if success:
+            self.status_label.config(text="音声の読み込みが完了しました")
+            self.progress_var.set("✅")  # 完了マーク
+            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶")
+            # 数秒後に消す
+            self.root.after(3000, lambda: self.progress_var.set(""))
+        else:
+            self.status_label.config(text=message or "音声の読み込みに失敗しました")
+            self.progress_var.set("❌")  # エラーマーク
+            # 再生ボタンを標準状態に
+            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生")
+            # 数秒後に消す
+            self.root.after(3000, lambda: self.progress_var.set(""))
+    
+    def _generate_voicevox_audio(self, text):
+        """VOICEVOXを使用してテキストから音声ファイルを生成する"""
+        temp_file = None
+        try:
+            # 音声合成クエリ作成
+            query_response = requests.post(
+                f"{self.voicevox_url}/audio_query",
+                params={'text': text, 'speaker': self.voicevox_speaker}
+            )
+            query = query_response.json()
+            
+            # 速度を設定（speech_rateから適切な比率に変換）
+            # 標準速度（220WPM）との比率を計算
+            speed_ratio = self.speech_rate / 220.0
+            # 範囲を拡大（0.5～3.0）してより速い再生をサポート
+            speed_scale = max(0.5, min(3.0, speed_ratio))
+            query['speedScale'] = speed_scale
+            
+            # 音声合成実行
+            synthesis_response = requests.post(
+                f"{self.voicevox_url}/synthesis",
+                params={'speaker': self.voicevox_speaker},
+                data=json.dumps(query)
+            )
+            
+            # 一時ファイルに保存
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as fp:
+                temp_file = fp.name
+                fp.write(synthesis_response.content)
+                print(f"VOICEVOXの一時ファイルを作成しました: {temp_file}")
+            
+            return temp_file
+        except Exception as e:
+            print(f"VOICEVOX音声ファイル生成エラー: {e}")
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
+            return None
+    
+    def _generate_gtts_audio(self, text):
+        """Google TTSを使用してテキストから音声ファイルを生成する"""
+        temp_file = None
+        try:
+            # Google TTSで音声合成
+            tts = gTTS(text=text, lang='ja', slow=False)
+            
+            # 一時ファイルに保存
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
+                temp_file = fp.name
+            
+            tts.save(temp_file)
+            print(f"Google TTSの一時ファイルを作成しました: {temp_file}")
+            
+            return temp_file
+        except Exception as e:
+            print(f"Google TTS音声ファイル生成エラー: {e}")
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
+            return None
+    
+    def _generate_say_audio(self, text):
+        """macOSのsayコマンドを使用してテキストから音声ファイルを生成する"""
+        temp_file = None
+        try:
+            # 一時ファイルを作成
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.aiff') as fp:
+                temp_file = fp.name
+            
+            # sayコマンドで音声ファイルを生成
+            subprocess.run(['say', '-r', str(self.speech_rate), '-o', temp_file, text], check=True)
+            print(f"sayコマンドの一時ファイルを作成しました: {temp_file}")
+            
+            return temp_file
+        except Exception as e:
+            print(f"sayコマンド音声ファイル生成エラー: {e}")
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
+            return None
     
     def _process_text_for_speech(self, text):
         """読み上げ用にテキストを処理する"""
@@ -705,6 +993,22 @@ class SimpleScriptReader:
         self.status_label.config(text=f"音声エンジンを {engine_name} に切り替えました")
         print(f"音声エンジンを {engine_name} に切り替えました")
         
+        # エンジンを変更した場合、現在のスライドの音声キャッシュをクリア
+        if self.current_slide in self.audio_cache:
+            try:
+                if os.path.exists(self.audio_cache[self.current_slide]):
+                    os.unlink(self.audio_cache[self.current_slide])
+                    print(f"エンジン変更により音声キャッシュを削除: {self.audio_cache[self.current_slide]}")
+            except Exception as e:
+                print(f"キャッシュ削除エラー: {e}")
+            
+            # キャッシュ情報をリセット
+            self.audio_cache.pop(self.current_slide, None)
+            self.is_loaded.pop(self.current_slide, None)
+            
+            # 自動的に音声を再読み込み
+            self.start_audio_preload()
+        
     def _speak_text(self, text):
         """テキストを音声で読み上げるバックグラウンド処理"""
         try:
@@ -719,18 +1023,11 @@ class SimpleScriptReader:
                 # 複数行を結合（空行は除外）
                 combined_text = " ".join([l for l in lines if l.strip()])
                 
-                if combined_text:
-                    # 再生が停止されたか確認
-                    if not self.is_speaking:
-                        pass
-                    else:
-                        # まとめたテキストを一度に合成・再生
-                        success = self.speak_with_voicevox(combined_text)
-                        if not success:
-                            # 失敗した場合はsayコマンドでフォールバック
-                            print("VOICEVOX処理失敗、sayコマンドにフォールバック")
-                            self.speak_process = subprocess.Popen(['say', '-r', str(self.speech_rate), combined_text])
-                            self.speak_process.wait()
+                if combined_text and self.is_speaking:
+                    # まとめたテキストを一度に合成・再生
+                    success = self.speak_with_voicevox(combined_text)
+                    if not success:
+                        print("VOICEVOX処理に失敗しました")
                 
                 print("音声再生が完了しました（VOICEVOX）")
             elif self.use_gtts and GTTS_AVAILABLE:
@@ -807,6 +1104,22 @@ class SimpleScriptReader:
         """スライダーの値から読み上げ速度を更新する"""
         self.speech_rate = int(float(value))
         self.speed_value_label.config(text=f"{self.speech_rate} WPM")
+        
+        # 読み上げ速度を変更した場合、現在のスライドの音声キャッシュをクリア
+        if self.current_slide in self.audio_cache:
+            try:
+                if os.path.exists(self.audio_cache[self.current_slide]):
+                    os.unlink(self.audio_cache[self.current_slide])
+                    print(f"速度変更により音声キャッシュを削除: {self.audio_cache[self.current_slide]}")
+            except Exception as e:
+                print(f"キャッシュ削除エラー: {e}")
+            
+            # キャッシュ情報をリセット
+            self.audio_cache.pop(self.current_slide, None)
+            self.is_loaded.pop(self.current_slide, None)
+            
+            # 自動的に音声を再読み込み
+            self.start_audio_preload()
     
     def increase_speed(self):
         """読み上げ速度を上げる（上矢印キー用）"""
@@ -870,6 +1183,20 @@ class SimpleScriptReader:
         if file_path:
             # 現在再生中なら停止
             self.stop_speaking()
+            
+            # キャッシュをクリア
+            for cache_file in self.audio_cache.values():
+                if os.path.exists(cache_file):
+                    try:
+                        os.unlink(cache_file)
+                    except:
+                        pass
+            
+            self.audio_cache = {}
+            self.is_loaded = {}
+            self.is_loading = {}
+            
+            # 新しいファイルを読み込み
             self.load_file(file_path)
 
     def get_voicevox_speakers(self):
@@ -887,6 +1214,15 @@ class SimpleScriptReader:
         """アプリケーション終了時の処理"""
         # 音声再生を停止
         self.stop_speaking()
+        
+        # 音声キャッシュの削除
+        for cache_file in self.audio_cache.values():
+            if os.path.exists(cache_file):
+                try:
+                    os.unlink(cache_file)
+                    print(f"キャッシュファイルを削除しました: {cache_file}")
+                except Exception as e:
+                    print(f"キャッシュファイル削除エラー: {e}")
         
         # VOICEVOXエンジンを終了（自動起動した場合のみ）
         if voicevox_process:
