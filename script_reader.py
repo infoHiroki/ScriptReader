@@ -733,11 +733,8 @@ class SimpleScriptReader:
             # 音声再生を確実に停止
             self.stop_speaking()
             
-            # 現在のスライドがロード中の場合も処理をキャンセル
-            current_idx = self.current_slide
-            if current_idx in self.is_loading and self.is_loading[current_idx]:
-                self.is_loading[current_idx] = False
-                log_message(f"スライド {current_idx+1} の読み込みを中断しました", level="INFO", prefix="スライド移動")
+            # すべての読み込みスレッドを停止
+            self._stop_all_loading_threads()
             
             # 次のスライドに移動
             self.current_slide += 1
@@ -749,11 +746,8 @@ class SimpleScriptReader:
             # 音声再生を確実に停止
             self.stop_speaking()
             
-            # 現在のスライドがロード中の場合も処理をキャンセル
-            current_idx = self.current_slide
-            if current_idx in self.is_loading and self.is_loading[current_idx]:
-                self.is_loading[current_idx] = False
-                log_message(f"スライド {current_idx+1} の読み込みを中断しました", level="INFO", prefix="スライド移動")
+            # すべての読み込みスレッドを停止
+            self._stop_all_loading_threads()
             
             # 前のスライドに移動
             self.current_slide -= 1
@@ -770,6 +764,9 @@ class SimpleScriptReader:
             
         current_idx = self.current_slide
         
+        # まず、すべての読み込み中スレッドを停止
+        self._stop_all_loading_threads()
+        
         # キャッシュされた音声がある場合はそれを使用
         if current_idx in self.audio_cache and os.path.exists(self.audio_cache[current_idx]):
             self.is_speaking = True
@@ -777,50 +774,58 @@ class SimpleScriptReader:
             
             # 音声ファイルを再生
             audio_file = self.audio_cache[current_idx]
-            print(f"キャッシュから音声再生: {audio_file}")
+            log_message(f"キャッシュから音声再生: {audio_file}", level="INFO", prefix="音声再生")
             
             # スレッドで再生
             self.speak_thread = threading.Thread(target=self._play_cached_audio, args=(audio_file,))
             self.speak_thread.daemon = True
             self.speak_thread.start()
         else:
-            # キャッシュがない場合は従来の方法で再生
-            # 読み込みを強調するメッセージを表示
+            # 現在読み込み中であれば、それを示すメッセージを表示して中止
             if current_idx in self.is_loading and self.is_loading[current_idx]:
-                self.status_label.config(text="音声読み込み中です。しばらくお待ちください...")
-            else:
-                self.status_label.config(text="音声は読み込まれていません。通常再生に切り替えます...")
+                self.status_label.config(text="音声読み込み中です。読み込み完了後に再生してください")
+                log_message("音声読み込み中のため再生できません。読み込み完了をお待ちください", 
+                          level="WARN", prefix="音声再生")
+                return
             
-            # 通常の再生処理を実行
-            self.is_speaking = True
-            self.speak_btn.config(text="再生中...", state=tk.DISABLED)
+            # 読み込まれておらず、読み込み中でもない場合は読み込みを促す
+            self.status_label.config(text="音声が読み込まれていません。先に「音声読み込み」ボタンを押してください")
+            log_message("音声が読み込まれていません。「音声読み込み (B)」ボタンで読み込みが必要です", 
+                      level="WARN", prefix="音声再生")
             
-            # スライドのテキストを取得
-            text = self.slides[self.current_slide]
-            print(f"音声再生開始: {len(text)}文字")
-            
-            # VOICEVOXを使う場合、起動しているか確認し必要に応じて起動
-            if self.use_voicevox and self.auto_start_voicevox.get() == 1:
-                self.start_voicevox_if_needed()
-            
-            # スレッドで音声再生を実行
-            self.speak_thread = threading.Thread(target=self._speak_text, args=(text,))
-            self.speak_thread.daemon = True
-            self.speak_thread.start()
+            # 今後のコードの整合性のため、ここでは再生せず、読み込みを促すのみとする
+            return
     
     def _play_cached_audio(self, audio_file):
         """キャッシュされた音声ファイルを再生する"""
         try:
+            # 現在のスライド情報を取得
+            current_idx = self.current_slide
+            slide_info = f"スライド {current_idx+1}/{len(self.slides)}"
+            
+            log_message(f"キャッシュ音声の再生を開始します ({slide_info})", 
+                      level="INFO", prefix="音声再生")
+            
             # 再生プロセスを開始
             self.speak_process = subprocess.Popen(['afplay', audio_file])
             
             # プロセスが終了するまで待機
             while self.is_speaking and self.speak_process.poll() is None:
                 time.sleep(0.01)
+            
+            if self.is_speaking:
+                # 正常終了の場合（停止ボタンが押されなかった場合）
+                log_message(f"キャッシュ音声の再生が完了しました ({slide_info})", 
+                          level="SUCCESS", prefix="音声再生")
+            else:
+                # 停止ボタンが押された場合
+                log_message(f"キャッシュ音声の再生が停止されました ({slide_info})", 
+                          level="INFO", prefix="音声再生")
                 
-            print("キャッシュ音声の再生が完了しました")
         except Exception as e:
-            print(f"キャッシュ音声再生エラー: {e}")
+            log_message(f"キャッシュ音声再生エラー: {e}", level="ERROR", prefix="音声再生")
+            import traceback
+            traceback.print_exc()
         finally:
             # UI更新
             self.root.after(0, self._reset_speak_button)
@@ -1065,6 +1070,25 @@ class SimpleScriptReader:
                 self.progress_var.set("🔄")  # 静的なアイコン
             except:
                 pass
+    
+    def _stop_all_loading_threads(self):
+        """全ての読み込み中スレッドを停止する"""
+        # 読み込み中のスライドを特定
+        loading_slides = []
+        for idx in list(self.is_loading.keys()):
+            if self.is_loading[idx]:
+                loading_slides.append(idx)
+        
+        # 読み込み状態をリセット
+        for idx in loading_slides:
+            self.is_loading[idx] = False
+            log_message(f"スライド {idx+1} の読み込みを中止しました", 
+                      level="INFO", prefix="スレッド制御")
+        
+        # 読み込み中のスライド数をログに出力
+        if loading_slides:
+            log_message(f"{len(loading_slides)}個の読み込みスレッドを停止しました", 
+                      level="INFO", prefix="スレッド制御")
     
     def _clean_other_caches(self):
         """現在のスライド以外のキャッシュをすべて削除する"""
@@ -1550,24 +1574,38 @@ class SimpleScriptReader:
                     
                 # UIを更新
                 self.root.after(0, self._reset_speak_button)
-                print("音声再生を停止しました")
+                log_message("音声再生を停止しました", level="INFO", prefix="音声再生")
+                
+                # 読み込み中のスレッドも全て停止
+                self._stop_all_loading_threads()
                 
                 # 一時ファイルが残っている可能性があるので確認
                 temp_dir = tempfile.gettempdir()
                 for file in os.listdir(temp_dir):
-                    if file.endswith(('.mp3', '.wav')) and os.path.isfile(os.path.join(temp_dir, file)):
+                    if file.endswith(('.mp3', '.wav', '.aiff')) and os.path.isfile(os.path.join(temp_dir, file)):
                         try:
                             # VOICEVOXとgTTSの両方の一時ファイルを検出するため、より広い条件で検索
-                            if 'tmp' in file.lower() or (file.startswith('tmp') and (file.endswith('.wav') or file.endswith('.mp3'))):
+                            if 'tmp' in file.lower():
                                 full_path = os.path.join(temp_dir, file)
                                 # ファイルが存在し、アクセス可能であれば削除
                                 if os.path.exists(full_path) and os.access(full_path, os.W_OK):
-                                    os.unlink(full_path)
-                                    print(f"一時ファイルを削除しました: {full_path}")
+                                    # 現在のキャッシュに含まれていないファイルのみ削除
+                                    is_cached = False
+                                    for cache_file in self.audio_cache.values():
+                                        if cache_file == full_path:
+                                            is_cached = True
+                                            break
+                                    
+                                    if not is_cached:
+                                        os.unlink(full_path)
+                                        log_message(f"一時ファイルを削除しました: {full_path}", 
+                                                  level="DEBUG", prefix="クリーンアップ")
                         except Exception as e:
-                            print(f"一時ファイル削除エラー: {e}")
+                            log_message(f"一時ファイル削除エラー: {e}", level="ERROR", prefix="クリーンアップ")
             except Exception as e:
-                print(f"音声停止エラー: {e}")
+                log_message(f"音声停止エラー: {e}", level="ERROR", prefix="音声再生")
+                import traceback
+                traceback.print_exc()
 
     def open_file(self):
         """ファイル選択ダイアログを開く"""
