@@ -375,9 +375,9 @@ class SimpleScriptReader:
                               font=("Helvetica", 12), bg=self.accent_red, fg="black")
         self.stop_btn.pack(side=tk.LEFT, padx=5)
         
-        # 音声読み込みボタン（手動読み込み用） - より目立たせる
-        self.load_audio_btn = Button(control_frame, text="音声読み込み ⬇", command=self.start_audio_preload, 
-                                  font=("Helvetica", 12, "bold"), bg=self.accent_blue, fg="white")
+        # 音声読み込みボタン（手動読み込み用） - より目立たせる、ショートカットキー表示
+        self.load_audio_btn = Button(control_frame, text="音声読み込み (L) ⬇", command=self.start_audio_preload, 
+                                  font=("Helvetica", 12, "bold"), bg=self.accent_blue, fg="black")
         self.load_audio_btn.pack(side=tk.LEFT, padx=8)
         
         # ファイルを開くボタン
@@ -527,6 +527,9 @@ class SimpleScriptReader:
         self.root.bind('<Control-o>', lambda event: self.open_file())
         self.root.bind('<Up>', lambda event: self.increase_speed())
         self.root.bind('<Down>', lambda event: self.decrease_speed())
+        # 音声読み込みショートカット
+        self.root.bind('l', lambda event: self.start_audio_preload())
+        self.root.bind('L', lambda event: self.start_audio_preload())
     
     def toggle_auto_start(self):
         """VOICEVOX自動起動オプションの切り替え"""
