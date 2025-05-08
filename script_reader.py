@@ -458,9 +458,9 @@ class SimpleScriptReader:
             # 再生プロセスを開始（wait()しない）
             self.speak_process = subprocess.Popen(['afplay', temp_file])
             
-            # プロセスが終了するまで定期的にチェック
+            # プロセスが終了するまで定期的にチェック（より短い間隔でチェック）
             while self.is_speaking and self.speak_process.poll() is None:
-                time.sleep(0.1)  # 100ミリ秒ごとにチェック
+                time.sleep(0.01)  # 10ミリ秒ごとにチェック（より高速に応答）
             
             # 再生が正常に完了したらファイルを削除
             if temp_file and os.path.exists(temp_file) and self.is_speaking:
@@ -517,28 +517,25 @@ class SimpleScriptReader:
             lines = self._process_text_for_speech(text)
             
             if self.use_voicevox:
-                # VOICEVOXで読み上げ
+                # VOICEVOXで読み上げ - 複数行をまとめて処理
                 selected_speaker = self.speaker_var.get()
                 print(f"VOICEVOXで音声再生を開始します（話者: {selected_speaker}）")
-                for i, line in enumerate(lines):
-                    if not line:  # 空行はスキップ
-                        continue
-                        
+                
+                # 複数行を結合（空行は除外）
+                combined_text = " ".join([l for l in lines if l.strip()])
+                
+                if combined_text:
                     # 再生が停止されたか確認
                     if not self.is_speaking:
-                        break
-                    
-                    # VOICEVOXで音声合成・再生
-                    success = self.speak_with_voicevox(line)
-                    if not success:
-                        # 失敗した場合はsayコマンドでフォールバック
-                        self.speak_process = subprocess.Popen(['say', '-r', str(self.speech_rate), line])
-                        self.speak_process.wait()
-                    
-                    # 改行ごとに間を挟む
-                    if i < len(lines) - 1 and self.is_speaking:
-                        adjusted_pause = self.pause_time * (220 / self.speech_rate)
-                        time.sleep(adjusted_pause)
+                        pass
+                    else:
+                        # まとめたテキストを一度に合成・再生
+                        success = self.speak_with_voicevox(combined_text)
+                        if not success:
+                            # 失敗した場合はsayコマンドでフォールバック
+                            print("VOICEVOX処理失敗、sayコマンドにフォールバック")
+                            self.speak_process = subprocess.Popen(['say', '-r', str(self.speech_rate), combined_text])
+                            self.speak_process.wait()
                 
                 print("音声再生が完了しました（VOICEVOX）")
             elif self.use_gtts and GTTS_AVAILABLE:
