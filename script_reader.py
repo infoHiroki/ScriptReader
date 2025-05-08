@@ -479,10 +479,9 @@ class SimpleScriptReader:
                               font=("Helvetica", 12), bg=self.accent_red, fg="black")
         self.stop_btn.pack(side=tk.LEFT, padx=5)
         
-        # 音声読み込みボタン（手動読み込み用） - 重要なボタンなのでさらに目立たせる
-        self.load_audio_btn = Button(control_frame, text="音声読み込み (B) ⬇", command=self.start_audio_preload, 
-                                  font=("Helvetica", 12, "bold"), bg="#FF9800", fg="black",
-                                  relief=tk.RAISED, borderwidth=3)
+        # 音声読み込みボタン（手動読み込み用）
+        self.load_audio_btn = Button(control_frame, text="音声読み込み (B)", command=self.start_audio_preload, 
+                                  font=("Helvetica", 12), bg=self.accent_blue, fg="black")
         self.load_audio_btn.pack(side=tk.LEFT, padx=8)
         
         # ファイルを開くボタン
@@ -813,6 +812,10 @@ class SimpleScriptReader:
                 # 正常終了の場合（停止ボタンが押されなかった場合）
                 log_message(f"キャッシュ音声の再生が完了しました ({slide_info})", 
                           level="SUCCESS", prefix="音声再生")
+                # 再生が終了したのでフラグをリセット
+                self.is_speaking = False
+                # ステータスラベルを更新
+                self.root.after(0, lambda: self.status_label.config(text=f"音声再生が完了しました ({slide_info})"))
             else:
                 # 停止ボタンが押された場合
                 log_message(f"キャッシュ音声の再生が停止されました ({slide_info})", 
