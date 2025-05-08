@@ -10,6 +10,7 @@ import json
 import sys
 import atexit
 import platform
+import datetime
 
 # 音声合成用ライブラリ
 try:
@@ -32,6 +33,32 @@ DEFAULT_SCRIPT_PATH = "/Users/hirokitakamura/Documents/Obsidian Vault/200_projec
 
 # VOICEVOXの設定
 VOICEVOX_URL = "http://localhost:50021"  # VOICEVOXエンジンのURL
+
+# ログ関連のユーティリティ
+def log_message(message, level="INFO", prefix=None):
+    """アプリケーションログを一貫した形式で出力する
+    
+    Args:
+        message (str): ログメッセージ
+        level (str): ログレベル (INFO, WARN, ERROR, DEBUG)
+        prefix (str): メッセージの前に付ける追加情報
+    """
+    timestamp = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
+    
+    # ログレベルに応じたプレフィックス
+    level_prefix = {
+        "INFO": "ℹ️",
+        "WARN": "⚠️",
+        "ERROR": "❌",
+        "DEBUG": "🔍",
+        "SUCCESS": "✅"
+    }.get(level.upper(), "")
+    
+    # プレフィックスがあれば追加
+    prefix_str = f"[{prefix}] " if prefix else ""
+    
+    # 整形されたログメッセージを出力
+    print(f"{timestamp} {level_prefix} {prefix_str}{message}")
 
 # macOSの場合のVOICEVOXデフォルトパス
 DEFAULT_VOICEVOX_PATH = "/Applications/VOICEVOX.app"
@@ -551,8 +578,13 @@ class SimpleScriptReader:
         self.prev_btn.config(state=tk.NORMAL if self.current_slide > 0 else tk.DISABLED)
         self.next_btn.config(state=tk.NORMAL if self.current_slide < len(self.slides) - 1 else tk.DISABLED)
         
-        # 音声の自動読み込みを開始
-        self.start_audio_preload()
+        # 音声が既に読み込まれている場合はボタンの表示を更新
+        current_idx = self.current_slide
+        if current_idx in self.is_loaded and self.is_loaded[current_idx]:
+            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶")
+            self.status_label.config(text="音声は読み込み済みです")
+            log_message(f"スライド {current_idx+1}/{len(self.slides)} は既に読み込み済みです", 
+                      level="INFO", prefix="音声読み込み")
         
     def next_slide(self):
         """次のスライドへ移動"""
@@ -640,17 +672,43 @@ class SimpleScriptReader:
         current_idx = self.current_slide
         if current_idx in self.is_loaded and self.is_loaded[current_idx]:
             self.status_label.config(text="音声は読み込み済みです")
+            log_message(f"スライド {current_idx+1}/{len(self.slides)} は既に読み込み済みです", 
+                      level="INFO", prefix="音声読み込み")
+            # 読み込み済みの場合は再生ボタンの表示を更新
+            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶")
             return
             
         # 読み込み中の場合はスキップ
         if current_idx in self.is_loading and self.is_loading[current_idx]:
             self.status_label.config(text="音声読み込み中...")
+            log_message(f"スライド {current_idx+1}/{len(self.slides)} の音声を読み込み中です", 
+                      level="INFO", prefix="音声読み込み")
             return
             
-        # 読み込み中表示
+        # エンジン種別を取得
+        engine_type = "VOICEVOX" if self.use_voicevox else "Google TTS" if self.use_gtts else "macOS say"
+        
+        # 読み込み中表示（さらに詳細な情報を追加）
         self.is_loading[current_idx] = True
-        self.status_label.config(text="音声を読み込んでいます...")
-        self.progress_var.set("🔄")
+        load_message = f"音声を読み込んでいます... ({engine_type}, {self.speech_rate}WPM)"
+        
+        # VOICEVOX使用時は話者情報も表示
+        if self.use_voicevox:
+            speaker_name = self.speaker_var.get()
+            load_message = f"音声を読み込んでいます... ({engine_type}, {speaker_name}, {self.speech_rate}WPM)"
+        
+        self.status_label.config(text=load_message)
+        
+        # プログレス表示をアニメーションに
+        self.progress_var.set("⏳")
+        # アニメーションを開始
+        self._start_progress_animation(current_idx)
+        
+        # エンジン情報をログに出力
+        log_message(f"スライド {current_idx+1}/{len(self.slides)} の音声読み込みを開始します", 
+                  level="INFO", prefix="音声読み込み")
+        log_message(f"使用エンジン: {engine_type}, 速度: {self.speech_rate}WPM", 
+                  level="DEBUG", prefix="音声読み込み")
         
         # スレッドで音声読み込みを実行
         thread = threading.Thread(target=self._load_audio_thread, args=(current_idx,))
@@ -669,6 +727,8 @@ class SimpleScriptReader:
             return
             
         self.is_loading[slide_idx] = True
+        log_message(f"次のスライド {slide_idx+1}/{len(self.slides)} の音声を事前読み込みします", 
+                  level="INFO", prefix="事前読み込み")
         thread = threading.Thread(target=self._load_audio_thread, args=(slide_idx, False))
         thread.daemon = True
         thread.start()
@@ -683,9 +743,16 @@ class SimpleScriptReader:
             lines = self._process_text_for_speech(text)
             combined_text = " ".join([l for l in lines if l.strip()])
             
+            # スライドIDのプレフィックス
+            slide_prefix = f"スライド{slide_idx+1}/{len(self.slides)}"
+            
+            log_message(f"処理テキスト: {len(combined_text)}文字, {len(lines)}行", 
+                      level="DEBUG", prefix=slide_prefix)
+            
             if not combined_text:
                 # テキストが空の場合は何もしない
                 self.is_loading[slide_idx] = False
+                log_message("テキストが空のため読み込みをスキップします", level="WARN", prefix=slide_prefix)
                 if is_current:
                     self.root.after(0, lambda: self._update_load_status(False, "テキストが空です"))
                 return
@@ -694,14 +761,22 @@ class SimpleScriptReader:
             # VOICEVOXの場合、必要に応じて起動
             if self.use_voicevox:
                 if self.auto_start_voicevox.get() == 1 and not is_voicevox_engine_running():
+                    log_message("VOICEVOXエンジンの自動起動を試みます", level="INFO", prefix=slide_prefix)
                     if not start_voicevox_engine():
                         self.is_loading[slide_idx] = False
+                        log_message("VOICEVOXエンジンの起動に失敗しました", level="ERROR", prefix=slide_prefix)
                         if is_current:
                             self.root.after(0, lambda: self._update_load_status(False, "VOICEVOXエンジンを起動できません"))
                         return
+                    else:
+                        log_message("VOICEVOXエンジンの起動に成功しました", level="SUCCESS", prefix=slide_prefix)
             
             # 音声ファイル生成
             temp_file = None
+            
+            # ファイル生成開始ログ
+            engine_type = "VOICEVOX" if self.use_voicevox and is_voicevox_engine_running() else "Google TTS" if self.use_gtts and GTTS_AVAILABLE else "macOS say"
+            log_message(f"{engine_type}で音声ファイル生成を開始します", level="INFO", prefix=slide_prefix)
             
             if self.use_voicevox and is_voicevox_engine_running():
                 # VOICEVOXで音声ファイル生成
@@ -718,50 +793,166 @@ class SimpleScriptReader:
                 if slide_idx in self.audio_cache and os.path.exists(self.audio_cache[slide_idx]):
                     try:
                         os.unlink(self.audio_cache[slide_idx])
-                    except:
-                        pass
+                        log_message(f"既存のキャッシュファイルを削除しました: {self.audio_cache[slide_idx]}", 
+                                  level="DEBUG", prefix=slide_prefix)
+                    except Exception as e:
+                        log_message(f"キャッシュファイル削除エラー: {e}", level="WARN", prefix=slide_prefix)
                 
                 self.audio_cache[slide_idx] = temp_file
                 self.is_loaded[slide_idx] = True
                 self.is_loading[slide_idx] = False
                 
+                file_size = os.path.getsize(temp_file) / 1024  # KB単位
+                log_message(f"音声ファイル生成完了: {temp_file} ({file_size:.1f}KB)", 
+                          level="SUCCESS", prefix=slide_prefix)
+                
                 if is_current:
                     self.root.after(0, lambda: self._update_load_status(True))
             else:
                 self.is_loading[slide_idx] = False
+                log_message("音声ファイル生成に失敗しました", level="ERROR", prefix=slide_prefix)
                 if is_current:
                     self.root.after(0, lambda: self._update_load_status(False, "音声合成に失敗しました"))
         except Exception as e:
-            print(f"音声読み込みエラー: {e}")
+            log_message(f"音声読み込みエラー: {e}", level="ERROR", prefix=f"スライド{slide_idx+1}")
+            import traceback
+            traceback.print_exc()  # スタックトレースを出力
             self.is_loading[slide_idx] = False
             if is_current:
                 self.root.after(0, lambda: self._update_load_status(False, f"エラー: {str(e)}"))
     
     def _update_load_status(self, success, message=None):
         """読み込み状態とステータスを更新する"""
-        if success:
-            self.status_label.config(text="音声の読み込みが完了しました")
-            self.progress_var.set("✅")  # 完了マーク
-            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶")
-            # 数秒後に消す
-            self.root.after(3000, lambda: self.progress_var.set(""))
-        else:
-            self.status_label.config(text=message or "音声の読み込みに失敗しました")
-            self.progress_var.set("❌")  # エラーマーク
-            # 再生ボタンを標準状態に
-            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生")
-            # 数秒後に消す
-            self.root.after(3000, lambda: self.progress_var.set(""))
+        try:
+            current_idx = self.current_slide
+            slide_info = f"スライド {current_idx+1}/{len(self.slides)}"
+            
+            if success:
+                # エンジン種別を取得
+                engine_type = "VOICEVOX" if self.use_voicevox else "Google TTS" if self.use_gtts else "macOS say"
+                
+                # 音声ファイルの情報を取得
+                file_info = ""
+                if current_idx in self.audio_cache and os.path.exists(self.audio_cache[current_idx]):
+                    file_path = self.audio_cache[current_idx]
+                    file_size = os.path.getsize(file_path) / 1024  # KB単位
+                    file_info = f"({file_size:.1f}KB)"
+                
+                # ログメッセージを生成
+                log_message(f"音声の読み込みが完了しました {file_info} ({slide_info})", 
+                          level="SUCCESS", prefix="音声読み込み")
+                
+                # 成功メッセージを表示 (エンジン情報を含める)
+                success_msg = f"音声の読み込みが完了しました {file_info}"
+                
+                # VOICEVOX使用時は話者情報も表示
+                if self.use_voicevox:
+                    speaker_name = self.speaker_var.get()
+                    success_msg = f"音声の読み込みが完了しました - {engine_type}, {speaker_name} {file_info}"
+                
+                self.status_label.config(text=success_msg)
+                self.progress_var.set("✅")  # 完了マーク
+                self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶")
+                # 数秒後に進捗表示を消す
+                self.root.after(3000, self._clear_progress_var_safe)
+            else:
+                error_msg = message or "音声の読み込みに失敗しました"
+                log_message(f"音声読み込みエラー: {error_msg} ({slide_info})", level="ERROR", prefix="音声読み込み")
+                
+                # 詳細なエラーメッセージをコンソールに出力（デバッグ用）
+                engine_type = "VOICEVOX" if self.use_voicevox else "Google TTS" if self.use_gtts else "macOS say"
+                log_message(f"エンジン: {engine_type}", level="DEBUG", prefix="詳細情報")
+                log_message(f"読み上げ速度: {self.speech_rate} WPM", level="DEBUG", prefix="詳細情報")
+                if self.use_voicevox:
+                    log_message(f"話者ID: {self.voicevox_speaker}", level="DEBUG", prefix="詳細情報")
+                    engine_status = "起動中" if is_voicevox_engine_running() else "停止中"
+                    log_message(f"VOICEVOXエンジン状態: {engine_status}", level="DEBUG", prefix="詳細情報")
+                
+                # UI表示を更新
+                self.status_label.config(text=error_msg)
+                self.progress_var.set("❌")  # エラーマーク
+                # 再生ボタンを標準状態に
+                self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生")
+                # 数秒後に進捗表示を消す
+                self.root.after(3000, self._clear_progress_var_safe)
+        except Exception as e:
+            log_message(f"ステータス更新エラー: {e}", level="ERROR", prefix="UI更新")
+            import traceback
+            traceback.print_exc()  # スタックトレースを出力して問題箇所を特定しやすくする
+            # 最低限のUIリカバリーを試みる
+            try:
+                self.status_label.config(text="ステータス更新中にエラーが発生しました")
+                self.progress_var.set("⚠️")  # 警告マーク
+                self.speak_btn.config(state=tk.NORMAL)
+                # 数秒後に進捗表示を消す
+                self.root.after(5000, self._clear_progress_var_safe)
+            except:
+                pass  # この時点でさらにエラーが発生しても無視
+    
+    def _start_progress_animation(self, slide_idx):
+        """読み込み中のプログレスアニメーションを開始する"""
+        # アニメーション用のイメージリスト
+        animation_frames = ["⏳", "🔄", "🔄", "🔄"]
+        self._animate_progress(slide_idx, animation_frames, 0)
+    
+    def _animate_progress(self, slide_idx, frames, frame_index):
+        """プログレスアニメーションのフレームを更新する"""
+        try:
+            # すでに読み込みが完了している、またはウィジェットが破棄されている場合は何もしない
+            if not self.root or not self.root.winfo_exists():
+                return
+                
+            if slide_idx not in self.is_loading or not self.is_loading[slide_idx]:
+                return  # 読み込みが終了していたら何もしない
+            
+            # フレームを更新
+            current_frame = frames[frame_index]
+            self.progress_var.set(current_frame)
+            
+            # 次のフレームのインデックスを計算
+            next_frame = (frame_index + 1) % len(frames)
+            
+            # 0.3秒後に次のフレームを表示
+            self.root.after(300, lambda: self._animate_progress(slide_idx, frames, next_frame))
+        except Exception as e:
+            # エラーが発生した場合は静的なアイコンに戻す
+            log_message(f"アニメーションエラー: {e}", level="ERROR", prefix="UI")
+            try:
+                self.progress_var.set("🔄")  # 静的なアイコン
+            except:
+                pass
+    
+    def _clear_progress_var_safe(self):
+        """進捗表示を安全にクリアする（タイマーコールバック用）"""
+        try:
+            # 既に破棄されているウィジェットでの操作を避ける
+            if not self.root or not self.root.winfo_exists():
+                return
+                
+            # progress_var属性が存在するか確認
+            if hasattr(self, 'progress_var'):
+                self.progress_var.set("")
+                log_message("進捗表示をクリアしました", level="DEBUG", prefix="UI")
+        except Exception as e:
+            log_message(f"進捗表示クリアエラー: {e}", level="ERROR", prefix="UI")
+            import traceback
+            traceback.print_exc()  # スタックトレースを出力
     
     def _generate_voicevox_audio(self, text):
         """VOICEVOXを使用してテキストから音声ファイルを生成する"""
         temp_file = None
         try:
             # 音声合成クエリ作成
+            log_message(f"VOICEVOX音声合成クエリを作成中 (文字数: {len(text)})", level="DEBUG", prefix="VOICEVOX")
             query_response = requests.post(
                 f"{self.voicevox_url}/audio_query",
                 params={'text': text, 'speaker': self.voicevox_speaker}
             )
+            
+            if query_response.status_code != 200:
+                log_message(f"VOICEVOX音声合成クエリエラー: {query_response.status_code}", level="ERROR", prefix="VOICEVOX")
+                return None
+                
             query = query_response.json()
             
             # 速度を設定（speech_rateから適切な比率に変換）
@@ -771,25 +962,36 @@ class SimpleScriptReader:
             speed_scale = max(0.5, min(3.0, speed_ratio))
             query['speedScale'] = speed_scale
             
+            log_message(f"VOICEVOX合成パラメータ: speedScale={speed_scale:.2f}, speaker={self.voicevox_speaker}", 
+                      level="DEBUG", prefix="VOICEVOX")
+            
             # 音声合成実行
+            log_message(f"VOICEVOX音声合成を実行中", level="DEBUG", prefix="VOICEVOX")
             synthesis_response = requests.post(
                 f"{self.voicevox_url}/synthesis",
                 params={'speaker': self.voicevox_speaker},
                 data=json.dumps(query)
             )
             
+            if synthesis_response.status_code != 200:
+                log_message(f"VOICEVOX音声合成実行エラー: {synthesis_response.status_code}", level="ERROR", prefix="VOICEVOX")
+                return None
+            
             # 一時ファイルに保存
             with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as fp:
                 temp_file = fp.name
                 fp.write(synthesis_response.content)
-                print(f"VOICEVOXの一時ファイルを作成しました: {temp_file}")
+                log_message(f"VOICEVOXの一時ファイルを作成しました: {temp_file}", level="INFO", prefix="VOICEVOX")
             
             return temp_file
         except Exception as e:
-            print(f"VOICEVOX音声ファイル生成エラー: {e}")
+            log_message(f"VOICEVOX音声ファイル生成エラー: {e}", level="ERROR", prefix="VOICEVOX")
+            import traceback
+            traceback.print_exc()
             if temp_file and os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
+                    log_message(f"エラーにより一時ファイルを削除しました: {temp_file}", level="DEBUG", prefix="VOICEVOX")
                 except:
                     pass
             return None
@@ -799,6 +1001,7 @@ class SimpleScriptReader:
         temp_file = None
         try:
             # Google TTSで音声合成
+            log_message(f"Google TTS音声合成を開始 (文字数: {len(text)})", level="DEBUG", prefix="Google TTS")
             tts = gTTS(text=text, lang='ja', slow=False)
             
             # 一時ファイルに保存
@@ -806,14 +1009,17 @@ class SimpleScriptReader:
                 temp_file = fp.name
             
             tts.save(temp_file)
-            print(f"Google TTSの一時ファイルを作成しました: {temp_file}")
+            log_message(f"Google TTSの一時ファイルを作成しました: {temp_file}", level="INFO", prefix="Google TTS")
             
             return temp_file
         except Exception as e:
-            print(f"Google TTS音声ファイル生成エラー: {e}")
+            log_message(f"Google TTS音声ファイル生成エラー: {e}", level="ERROR", prefix="Google TTS")
+            import traceback
+            traceback.print_exc()
             if temp_file and os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
+                    log_message(f"エラーにより一時ファイルを削除しました: {temp_file}", level="DEBUG", prefix="Google TTS")
                 except:
                     pass
             return None
@@ -826,16 +1032,28 @@ class SimpleScriptReader:
             with tempfile.NamedTemporaryFile(delete=False, suffix='.aiff') as fp:
                 temp_file = fp.name
             
+            log_message(f"macOS say音声合成を開始 (文字数: {len(text)}, 速度: {self.speech_rate}WPM)", 
+                      level="DEBUG", prefix="macOS say")
+            
             # sayコマンドで音声ファイルを生成
-            subprocess.run(['say', '-r', str(self.speech_rate), '-o', temp_file, text], check=True)
-            print(f"sayコマンドの一時ファイルを作成しました: {temp_file}")
+            result = subprocess.run(['say', '-r', str(self.speech_rate), '-o', temp_file, text], 
+                                  check=True, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                log_message(f"sayコマンドの一時ファイルを作成しました: {temp_file}", level="INFO", prefix="macOS say")
+            else:
+                log_message(f"sayコマンドエラー: {result.stderr}", level="ERROR", prefix="macOS say")
+                return None
             
             return temp_file
         except Exception as e:
-            print(f"sayコマンド音声ファイル生成エラー: {e}")
+            log_message(f"sayコマンド音声ファイル生成エラー: {e}", level="ERROR", prefix="macOS say")
+            import traceback
+            traceback.print_exc()
             if temp_file and os.path.exists(temp_file):
                 try:
                     os.unlink(temp_file)
+                    log_message(f"エラーにより一時ファイルを削除しました: {temp_file}", level="DEBUG", prefix="macOS say")
                 except:
                     pass
             return None
