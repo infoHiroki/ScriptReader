@@ -375,10 +375,10 @@ class SimpleScriptReader:
                               font=("Helvetica", 12), bg=self.accent_red, fg="black")
         self.stop_btn.pack(side=tk.LEFT, padx=5)
         
-        # 音声読み込みボタン（手動読み込み用）
-        self.load_audio_btn = Button(control_frame, text="音声読み込み", command=self.start_audio_preload, 
-                                  font=("Helvetica", 12), bg=self.accent_blue, fg="black")
-        self.load_audio_btn.pack(side=tk.LEFT, padx=5)
+        # 音声読み込みボタン（手動読み込み用） - より目立たせる
+        self.load_audio_btn = Button(control_frame, text="音声読み込み ⬇", command=self.start_audio_preload, 
+                                  font=("Helvetica", 12, "bold"), bg=self.accent_blue, fg="white")
+        self.load_audio_btn.pack(side=tk.LEFT, padx=8)
         
         # ファイルを開くボタン
         self.open_btn = Button(control_frame, text="ファイルを開く", command=self.open_file, 
@@ -715,24 +715,6 @@ class SimpleScriptReader:
         
         # スレッドで音声読み込みを実行
         thread = threading.Thread(target=self._load_audio_thread, args=(current_idx,))
-        thread.daemon = True
-        thread.start()
-        
-        # 次のスライドも事前読み込み（優先度低）
-        next_idx = current_idx + 1
-        if next_idx < len(self.slides) and (next_idx not in self.is_loaded or not self.is_loaded[next_idx]) and (next_idx not in self.is_loading):
-            # 少し遅延させて現在のスライドを優先
-            self.root.after(2000, lambda: self._preload_next_slide(next_idx))
-    
-    def _preload_next_slide(self, slide_idx):
-        """次のスライドを事前読み込み"""
-        if slide_idx in self.is_loading or slide_idx in self.is_loaded:
-            return
-            
-        self.is_loading[slide_idx] = True
-        log_message(f"次のスライド {slide_idx+1}/{len(self.slides)} の音声を事前読み込みします", 
-                  level="INFO", prefix="事前読み込み")
-        thread = threading.Thread(target=self._load_audio_thread, args=(slide_idx, False))
         thread.daemon = True
         thread.start()
     
@@ -1334,16 +1316,17 @@ class SimpleScriptReader:
             try:
                 if os.path.exists(self.audio_cache[self.current_slide]):
                     os.unlink(self.audio_cache[self.current_slide])
-                    print(f"速度変更により音声キャッシュを削除: {self.audio_cache[self.current_slide]}")
+                    log_message(f"速度変更により音声キャッシュを削除: {self.audio_cache[self.current_slide]}", 
+                              level="INFO", prefix="キャッシュ")
             except Exception as e:
-                print(f"キャッシュ削除エラー: {e}")
+                log_message(f"キャッシュ削除エラー: {e}", level="ERROR", prefix="キャッシュ")
             
             # キャッシュ情報をリセット
             self.audio_cache.pop(self.current_slide, None)
             self.is_loaded.pop(self.current_slide, None)
             
-            # 自動的に音声を再読み込み
-            self.start_audio_preload()
+            # 音声の読み込みが必要であることを表示
+            self.status_label.config(text=f"速度を {self.speech_rate} WPM に変更しました。音声の再読み込みが必要です")
     
     def increase_speed(self):
         """読み上げ速度を上げる（上矢印キー用）"""
