@@ -421,6 +421,7 @@ class SimpleScriptReader:
     
     def speak_with_voicevox(self, text):
         """VOICEVOXを使用してテキストを音声合成"""
+        temp_file = None
         try:
             # 音声合成クエリ作成
             query_response = requests.post(
@@ -436,19 +437,40 @@ class SimpleScriptReader:
                 data=json.dumps(query)
             )
             
+            # 音声合成が停止された場合は処理を中断
+            if not self.is_speaking:
+                return False
+            
             # 一時ファイルに保存して再生
             with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as fp:
                 temp_file = fp.name
                 fp.write(synthesis_response.content)
+                print(f"VOICEVOXの一時ファイルを作成しました: {temp_file}")
             
-            # 再生
+            # 再生プロセスを開始（wait()しない）
             self.speak_process = subprocess.Popen(['afplay', temp_file])
-            self.speak_process.wait()
-            os.unlink(temp_file)
+            
+            # プロセスが終了するまで定期的にチェック
+            while self.is_speaking and self.speak_process.poll() is None:
+                time.sleep(0.1)  # 100ミリ秒ごとにチェック
+            
+            # 再生が正常に完了したらファイルを削除
+            if temp_file and os.path.exists(temp_file) and self.is_speaking:
+                try:
+                    os.unlink(temp_file)
+                    print(f"VOICEVOXの一時ファイルを削除しました: {temp_file}")
+                except Exception as e:
+                    print(f"一時ファイル削除エラー: {e}")
             
             return True
         except Exception as e:
             print(f"VOICEVOX連携エラー: {e}")
+            # エラー時にも一時ファイルがあれば削除を試みる
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.unlink(temp_file)
+                except:
+                    pass
             return False
     
     def change_engine(self, engine_type):
@@ -598,17 +620,26 @@ class SimpleScriptReader:
     
     def _reset_speak_button(self):
         """音声再生ボタンをリセット"""
-        self.is_speaking = False
-        self.speak_process = None
+        # UI要素だけを更新（is_speakingフラグやspeak_processはstop_speaking内で処理）
         self.speak_btn.config(text="音声再生", state=tk.NORMAL)
     
     def stop_speaking(self):
         """音声再生を停止"""
-        if self.is_speaking and self.speak_process:
+        if self.is_speaking:
             try:
-                # プロセスを強制終了
-                self.speak_process.terminate()
-                self._reset_speak_button()
+                # 先にフラグを停止に設定（これにより実行中のスレッドがループを抜ける）
+                self.is_speaking = False
+                
+                # プロセスが存在する場合は強制終了
+                if self.speak_process:
+                    self.speak_process.terminate()
+                    # プロセスが確実に終了するまで少し待機
+                    self.speak_process.poll()
+                    # プロセス参照をクリア
+                    self.speak_process = None
+                    
+                # UIを更新
+                self.root.after(0, self._reset_speak_button)
                 print("音声再生を停止しました")
                 
                 # 一時ファイルが残っている可能性があるので確認
@@ -616,10 +647,15 @@ class SimpleScriptReader:
                 for file in os.listdir(temp_dir):
                     if file.endswith(('.mp3', '.wav')) and os.path.isfile(os.path.join(temp_dir, file)):
                         try:
-                            if 'tmp' in file.lower():
-                                os.unlink(os.path.join(temp_dir, file))
-                        except:
-                            pass
+                            # VOICEVOXとgTTSの両方の一時ファイルを検出するため、より広い条件で検索
+                            if 'tmp' in file.lower() or (file.startswith('tmp') and (file.endswith('.wav') or file.endswith('.mp3'))):
+                                full_path = os.path.join(temp_dir, file)
+                                # ファイルが存在し、アクセス可能であれば削除
+                                if os.path.exists(full_path) and os.access(full_path, os.W_OK):
+                                    os.unlink(full_path)
+                                    print(f"一時ファイルを削除しました: {full_path}")
+                        except Exception as e:
+                            print(f"一時ファイル削除エラー: {e}")
             except Exception as e:
                 print(f"音声停止エラー: {e}")
 
