@@ -232,7 +232,7 @@ class SimpleScriptReader:
     def __init__(self, root):
         self.root = root
         self.root.title("シンプル台本リーダー")
-        self.root.geometry("800x680")  # 高さを少し大きくしてVOICEVOX自動起動オプション用のスペースを確保
+        self.root.geometry("800x720")  # 高さを少し大きくしてVOICEVOX設定用のスペースを確保
         
         # ダークモードのカラースキーム
         self.bg_color = "#2b2b2b"  # 背景色
@@ -256,8 +256,9 @@ class SimpleScriptReader:
         self.voicevox_speaker = 1  # デフォルト話者ID
         self.voicevox_url = VOICEVOX_URL  # VOICEVOXエンジンのURL
         
-        # VOICEVOXの自動起動設定
-        self.auto_start_voicevox = IntVar(value=1)  # デフォルトで有効
+        # VOICEVOX関連設定
+        self.voicevox_path = StringVar(value=find_voicevox_path() or "")  # VOICEVOXのパス
+        self.auto_start_voicevox = IntVar(value=1)  # 自動起動設定（デフォルトで有効）
         
         # 音声キャッシュ用の辞書
         self.audio_cache = {}  # キー: スライドインデックス, 値: 一時ファイルパス
