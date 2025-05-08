@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import scrolledtext, Button, Label, Frame, filedialog, Scale, OptionMenu, StringVar
+from tkinter import scrolledtext, Button, Label, Frame, filedialog, Scale, OptionMenu, StringVar, Checkbutton, IntVar
 import os.path
 import subprocess
 import threading
@@ -7,6 +7,9 @@ import tempfile
 import time
 import re
 import json
+import sys
+import atexit
+import platform
 
 # 音声合成用ライブラリ
 try:
@@ -26,6 +29,12 @@ except ImportError:
 
 # 台本ファイルへのデフォルトパス
 DEFAULT_SCRIPT_PATH = "/Users/hirokitakamura/Documents/Obsidian Vault/200_projects/AI福岡勉強会/Claude_MCP_LT_script.md"
+
+# VOICEVOXの設定
+VOICEVOX_URL = "http://localhost:50021"  # VOICEVOXエンジンのURL
+
+# macOSの場合のVOICEVOXデフォルトパス
+DEFAULT_VOICEVOX_PATH = "/Applications/VOICEVOX.app"
 
 # VOICEVOXの話者リスト
 VOICEVOX_SPEAKERS = {
@@ -78,11 +87,125 @@ VOICEVOX_SPEAKERS = {
     "剣崎雌雄": 21,
 }
 
+# VOICEVOXエンジンプロセス
+voicevox_process = None
+
+def find_voicevox_path():
+    """VOICEVOXのインストールパスを検出する"""
+    # macOSの場合
+    if platform.system() == 'Darwin':
+        # デフォルトのインストールパスをチェック
+        if os.path.exists(DEFAULT_VOICEVOX_PATH):
+            return DEFAULT_VOICEVOX_PATH
+        
+        # Applicationsフォルダを検索
+        try:
+            result = subprocess.run(['find', '/Applications', '-name', 'VOICEVOX.app', '-maxdepth', '1'], 
+                                  capture_output=True, text=True, check=False)
+            if result.stdout:
+                return result.stdout.strip()
+        except Exception:
+            pass
+    
+    # Windowsの場合（将来的に対応）
+    elif platform.system() == 'Windows':
+        # Windowsでの一般的なインストールパスをチェック
+        paths = [
+            os.path.join(os.environ.get('ProgramFiles', 'C:\\Program Files'), 'VOICEVOX'),
+            os.path.join(os.environ.get('ProgramFiles(x86)', 'C:\\Program Files (x86)'), 'VOICEVOX')
+        ]
+        for path in paths:
+            if os.path.exists(path):
+                return path
+    
+    return None
+
+def is_voicevox_engine_running():
+    """VOICEVOXエンジンが起動しているか確認する"""
+    if not REQUESTS_AVAILABLE:
+        return False
+    
+    try:
+        response = requests.get(f"{VOICEVOX_URL}/version", timeout=1)
+        return response.status_code == 200
+    except Exception:
+        return False
+
+def start_voicevox_engine():
+    """VOICEVOXエンジンを起動する"""
+    global voicevox_process
+    
+    if is_voicevox_engine_running():
+        print("VOICEVOXエンジンはすでに実行中です")
+        return True
+    
+    voicevox_path = find_voicevox_path()
+    if not voicevox_path:
+        print("VOICEVOXのインストールパスが見つかりません")
+        return False
+    
+    try:
+        # macOS
+        if platform.system() == 'Darwin':
+            # VOICEVOX.app内のengineを起動
+            engine_path = os.path.join(voicevox_path, 'Contents', 'Resources', 'vv-engine', 'run')
+            if os.path.exists(engine_path):
+                print(f"VOICEVOXエンジンを起動しています: {engine_path}")
+                voicevox_process = subprocess.Popen([engine_path, '--host=localhost', '--port=50021'], 
+                                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                # プロセスが終了しないよう、atexitで登録
+                atexit.register(stop_voicevox_engine)
+                
+                # 起動を待機
+                max_retries = 10
+                for i in range(max_retries):
+                    time.sleep(1)  # 1秒待機
+                    if is_voicevox_engine_running():
+                        print("VOICEVOXエンジンが起動しました")
+                        return True
+                    print(f"VOICEVOXエンジン起動待機中... ({i+1}/{max_retries})")
+                
+                print("VOICEVOXエンジンの起動がタイムアウトしました")
+                return False
+            else:
+                print(f"VOICEVOXエンジン実行ファイルが見つかりません: {engine_path}")
+                return False
+        
+        # Windows（将来的に対応）
+        elif platform.system() == 'Windows':
+            # Windowsでの起動方法（将来実装）
+            print("Windows環境でのVOICEVOX自動起動は現在サポートされていません")
+            return False
+        
+        else:
+            print(f"サポートされていないOS: {platform.system()}")
+            return False
+        
+    except Exception as e:
+        print(f"VOICEVOXエンジン起動エラー: {e}")
+        return False
+
+def stop_voicevox_engine():
+    """VOICEVOXエンジンを停止する"""
+    global voicevox_process
+    if voicevox_process:
+        try:
+            print("VOICEVOXエンジンを停止します")
+            voicevox_process.terminate()
+            voicevox_process.wait(timeout=5)
+            voicevox_process = None
+        except Exception as e:
+            print(f"VOICEVOXエンジン停止エラー: {e}")
+            try:
+                voicevox_process.kill()
+            except:
+                pass
+
 class SimpleScriptReader:
     def __init__(self, root):
         self.root = root
         self.root.title("シンプル台本リーダー")
-        self.root.geometry("800x650")  # 高さを少し大きくして話者選択用のスペースを確保
+        self.root.geometry("800x680")  # 高さを少し大きくしてVOICEVOX自動起動オプション用のスペースを確保
         
         # ダークモードのカラースキーム
         self.bg_color = "#2b2b2b"  # 背景色
@@ -104,7 +227,10 @@ class SimpleScriptReader:
         self.use_gtts = False   # Google TTS
         self.use_voicevox = False  # VOICEVOX
         self.voicevox_speaker = 1  # デフォルト話者ID
-        self.voicevox_url = "http://localhost:50021"  # VOICEVOXエンジンのURL
+        self.voicevox_url = VOICEVOX_URL  # VOICEVOXエンジンのURL
+        
+        # VOICEVOXの自動起動設定
+        self.auto_start_voicevox = IntVar(value=1)  # デフォルトで有効
         
         # ルートウィンドウの背景色設定
         self.root.configure(bg=self.bg_color)
@@ -124,6 +250,25 @@ class SimpleScriptReader:
             self.slides = ["ファイルを開いていません。「ファイルを開く」ボタンをクリックしてください。"]
             self.show_slide()
         
+        # アプリケーション終了時の処理
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # VOICEVOXエンジンを自動起動
+        if self.auto_start_voicevox.get() == 1:
+            self.start_voicevox_if_needed()
+    
+    def start_voicevox_if_needed(self):
+        """VOICEVOXエンジンが起動していなければ自動起動"""
+        if not is_voicevox_engine_running():
+            if start_voicevox_engine():
+                self.status_label.config(text="VOICEVOXエンジンを自動起動しました")
+                # 起動に成功したらVOICEVOXエンジンを選択
+                self.root.after(2000, lambda: self.change_engine("voicevox"))
+            else:
+                self.status_label.config(text="VOICEVOXエンジンの自動起動に失敗しました")
+        else:
+            self.status_label.config(text="VOICEVOXエンジンは既に起動しています")
+    
     def load_file(self, file_path):
         """指定されたファイルを読み込む"""
         self.script_path = file_path
@@ -267,7 +412,7 @@ class SimpleScriptReader:
                                 state=tk.NORMAL if REQUESTS_AVAILABLE else tk.DISABLED)
         self.voicevox_btn.pack(side=tk.LEFT, padx=5)
         
-        # VOICEVOX話者選択フレーム（新規追加）
+        # VOICEVOX話者選択フレーム
         voice_frame = Frame(self.root, bg=self.bg_color)
         voice_frame.pack(fill=tk.X, padx=10, pady=5)
         
@@ -292,6 +437,32 @@ class SimpleScriptReader:
                                       bg=self.bg_color, fg=self.text_fg_color)
         self.speaker_info_label.pack(side=tk.LEFT, padx=5)
         
+        # VOICEVOX自動起動フレーム (新規追加)
+        auto_frame = Frame(self.root, bg=self.bg_color)
+        auto_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # VOICEVOX自動起動チェックボックス
+        self.auto_start_checkbox = Checkbutton(auto_frame, text="VOICEVOXを自動起動する", 
+                                           variable=self.auto_start_voicevox,
+                                           font=("Helvetica", 12),
+                                           bg=self.bg_color, fg=self.text_fg_color,
+                                           selectcolor=self.bg_color,
+                                           activebackground=self.bg_color,
+                                           command=self.toggle_auto_start)
+        self.auto_start_checkbox.pack(side=tk.LEFT, padx=5)
+        
+        # VOICEVOX手動起動ボタン
+        self.start_voicevox_btn = Button(auto_frame, text="VOICEVOXを起動", 
+                                     command=self.start_voicevox_if_needed,
+                                     font=("Helvetica", 12), 
+                                     bg=self.accent_green, fg="black")
+        self.start_voicevox_btn.pack(side=tk.LEFT, padx=5)
+        
+        # ステータス表示ラベル (新規追加)
+        self.status_label = Label(self.root, text="", font=("Helvetica", 11),
+                               bg=self.bg_color, fg=self.text_fg_color)
+        self.status_label.pack(padx=10, pady=5)
+        
         # 初期話者を設定
         self.change_speaker()
         
@@ -307,6 +478,15 @@ class SimpleScriptReader:
         self.root.bind('<Control-o>', lambda event: self.open_file())
         self.root.bind('<Up>', lambda event: self.increase_speed())
         self.root.bind('<Down>', lambda event: self.decrease_speed())
+    
+    def toggle_auto_start(self):
+        """VOICEVOX自動起動オプションの切り替え"""
+        if self.auto_start_voicevox.get() == 1:
+            self.status_label.config(text="VOICEVOXの自動起動が有効になりました")
+            # 設定が有効になった場合、VOICEVOXエンジンを起動
+            self.start_voicevox_if_needed()
+        else:
+            self.status_label.config(text="VOICEVOXの自動起動が無効になりました")
     
     def change_speaker(self, *args):
         """VOICEVOXの話者を変更する"""
@@ -363,6 +543,10 @@ class SimpleScriptReader:
         text = self.slides[self.current_slide]
         print(f"音声再生開始: {len(text)}文字")
         
+        # VOICEVOXを使う場合、起動しているか確認し必要に応じて起動
+        if self.use_voicevox and self.auto_start_voicevox.get() == 1:
+            self.start_voicevox_if_needed()
+        
         # スレッドで音声再生を実行
         self.speak_thread = threading.Thread(target=self._speak_text, args=(text,))
         self.speak_thread.daemon = True
@@ -414,7 +598,7 @@ class SimpleScriptReader:
             return False
             
         try:
-            response = requests.get(f"{self.voicevox_url}/version")
+            response = requests.get(f"{self.voicevox_url}/version", timeout=1)
             return response.status_code == 200
         except:
             return False
@@ -498,8 +682,18 @@ class SimpleScriptReader:
                 selected_speaker = self.speaker_var.get()
                 engine_name = f"VOICEVOX ({selected_speaker})"
             else:
-                print("VOICEVOXエンジンに接続できません。起動しているか確認してください。")
-                engine_name = "macOS say (フォールバック)"
+                # 自動起動が有効なら、起動を試みる
+                if self.auto_start_voicevox.get() == 1:
+                    if self.start_voicevox_if_needed():
+                        self.use_voicevox = True
+                        selected_speaker = self.speaker_var.get()
+                        engine_name = f"VOICEVOX ({selected_speaker})"
+                    else:
+                        print("VOICEVOXエンジンに接続できません。起動しているか確認してください。")
+                        engine_name = "macOS say (フォールバック)"
+                else:
+                    print("VOICEVOXエンジンに接続できません。起動しているか確認してください。")
+                    engine_name = "macOS say (フォールバック)"
         else:
             engine_name = "macOS say"
         
@@ -508,6 +702,7 @@ class SimpleScriptReader:
         self.gtts_btn.config(bg=self.accent_blue if self.use_gtts else self.btn_bg)
         self.voicevox_btn.config(bg=self.accent_blue if self.use_voicevox else self.btn_bg)
         
+        self.status_label.config(text=f"音声エンジンを {engine_name} に切り替えました")
         print(f"音声エンジンを {engine_name} に切り替えました")
         
     def _speak_text(self, text):
@@ -678,7 +873,7 @@ class SimpleScriptReader:
             self.load_file(file_path)
 
     def get_voicevox_speakers(self):
-        """VOICEVOXから利用可能な話者リストを取得する（将来的な機能）"""
+        """VOICEVOXから利用可能な話者リストを取得する"""
         try:
             if self.check_voicevox_available():
                 response = requests.get(f"{self.voicevox_url}/speakers")
@@ -687,6 +882,18 @@ class SimpleScriptReader:
             return []
         except:
             return []
+    
+    def on_closing(self):
+        """アプリケーション終了時の処理"""
+        # 音声再生を停止
+        self.stop_speaking()
+        
+        # VOICEVOXエンジンを終了（自動起動した場合のみ）
+        if voicevox_process:
+            stop_voicevox_engine()
+        
+        # アプリケーションを終了
+        self.root.destroy()
 
 if __name__ == "__main__":
     root = tk.Tk()
