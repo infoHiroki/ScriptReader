@@ -117,12 +117,54 @@ VOICEVOX_SPEAKERS = {
 # VOICEVOXエンジンプロセス
 voicevox_process = None
 
-def find_voicevox_path():
-    """VOICEVOXのインストールパスを検出する"""
+def validate_voicevox_path(path):
+    """指定されたVOICEVOXパスが有効かどうかを確認する
+    
+    Args:
+        path (str): 検証するVOICEVOXパス
+        
+    Returns:
+        bool: パスが有効な場合はTrue、そうでない場合はFalse
+    """
+    if not path or not os.path.exists(path):
+        return False
+        
+    # macOSの場合
+    if platform.system() == 'Darwin':
+        # VOICEVOXアプリバンドルの存在確認
+        if path.endswith('.app') and os.path.isdir(path):
+            # エンジン実行ファイルの存在確認
+            engine_path = os.path.join(path, 'Contents', 'Resources', 'vv-engine', 'run')
+            return os.path.exists(engine_path) and os.access(engine_path, os.X_OK)
+        return False
+    
+    # Windowsの場合（将来的に対応）
+    elif platform.system() == 'Windows':
+        # VOICEVOX実行ファイルの存在確認
+        exe_path = os.path.join(path, 'VOICEVOX.exe')
+        return os.path.exists(exe_path) and os.access(exe_path, os.X_OK)
+    
+    return False
+
+def find_voicevox_path(user_path=None):
+    """VOICEVOXのインストールパスを検出する
+    
+    Args:
+        user_path (str, optional): ユーザーが指定したVOICEVOXパス
+        
+    Returns:
+        str or None: 有効なVOICEVOXパス、見つからない場合はNone
+    """
+    # ユーザー指定のパスがあり、それが有効な場合はそれを使用
+    if user_path and validate_voicevox_path(user_path):
+        log_message(f"ユーザー指定のVOICEVOXパスを使用: {user_path}", level="INFO", prefix="VOICEVOX")
+        return user_path
+        
     # macOSの場合
     if platform.system() == 'Darwin':
         # デフォルトのインストールパスをチェック
-        if os.path.exists(DEFAULT_VOICEVOX_PATH):
+        if os.path.exists(DEFAULT_VOICEVOX_PATH) and validate_voicevox_path(DEFAULT_VOICEVOX_PATH):
+            log_message(f"デフォルトのVOICEVOXパスを使用: {DEFAULT_VOICEVOX_PATH}", level="INFO", prefix="VOICEVOX")
             return DEFAULT_VOICEVOX_PATH
         
         # Applicationsフォルダを検索
@@ -130,9 +172,12 @@ def find_voicevox_path():
             result = subprocess.run(['find', '/Applications', '-name', 'VOICEVOX.app', '-maxdepth', '1'], 
                                   capture_output=True, text=True, check=False)
             if result.stdout:
-                return result.stdout.strip()
-        except Exception:
-            pass
+                found_path = result.stdout.strip()
+                if validate_voicevox_path(found_path):
+                    log_message(f"検索で見つかったVOICEVOXパスを使用: {found_path}", level="INFO", prefix="VOICEVOX")
+                    return found_path
+        except Exception as e:
+            log_message(f"VOICEVOXパスの検索中にエラー: {e}", level="ERROR", prefix="VOICEVOX")
     
     # Windowsの場合（将来的に対応）
     elif platform.system() == 'Windows':
@@ -142,9 +187,11 @@ def find_voicevox_path():
             os.path.join(os.environ.get('ProgramFiles(x86)', 'C:\\Program Files (x86)'), 'VOICEVOX')
         ]
         for path in paths:
-            if os.path.exists(path):
+            if validate_voicevox_path(path):
+                log_message(f"Windows標準パスでVOICEVOXを発見: {path}", level="INFO", prefix="VOICEVOX")
                 return path
     
+    log_message("有効なVOICEVOXパスが見つかりませんでした", level="WARN", prefix="VOICEVOX")
     return None
 
 def is_voicevox_engine_running():
@@ -158,17 +205,25 @@ def is_voicevox_engine_running():
     except Exception:
         return False
 
-def start_voicevox_engine():
-    """VOICEVOXエンジンを起動する"""
+def start_voicevox_engine(user_specified_path=None):
+    """VOICEVOXエンジンを起動する
+    
+    Args:
+        user_specified_path (str, optional): ユーザーが指定したVOICEVOXパス
+        
+    Returns:
+        bool: 起動に成功した場合はTrue、失敗した場合はFalse
+    """
     global voicevox_process
     
     if is_voicevox_engine_running():
-        print("VOICEVOXエンジンはすでに実行中です")
+        log_message("VOICEVOXエンジンはすでに実行中です", level="INFO", prefix="VOICEVOX")
         return True
     
-    voicevox_path = find_voicevox_path()
+    # パスを検索（ユーザー指定のパスがある場合はそれを優先）
+    voicevox_path = find_voicevox_path(user_specified_path)
     if not voicevox_path:
-        print("VOICEVOXのインストールパスが見つかりません")
+        log_message("VOICEVOXのインストールパスが見つかりません", level="ERROR", prefix="VOICEVOX")
         return False
     
     try:
@@ -177,7 +232,7 @@ def start_voicevox_engine():
             # VOICEVOX.app内のengineを起動
             engine_path = os.path.join(voicevox_path, 'Contents', 'Resources', 'vv-engine', 'run')
             if os.path.exists(engine_path):
-                print(f"VOICEVOXエンジンを起動しています: {engine_path}")
+                log_message(f"VOICEVOXエンジンを起動しています: {engine_path}", level="INFO", prefix="VOICEVOX")
                 voicevox_process = subprocess.Popen([engine_path, '--host=localhost', '--port=50021'], 
                                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 # プロセスが終了しないよう、atexitで登録
@@ -188,28 +243,30 @@ def start_voicevox_engine():
                 for i in range(max_retries):
                     time.sleep(1)  # 1秒待機
                     if is_voicevox_engine_running():
-                        print("VOICEVOXエンジンが起動しました")
+                        log_message("VOICEVOXエンジンが起動しました", level="SUCCESS", prefix="VOICEVOX")
                         return True
-                    print(f"VOICEVOXエンジン起動待機中... ({i+1}/{max_retries})")
+                    log_message(f"VOICEVOXエンジン起動待機中... ({i+1}/{max_retries})", level="INFO", prefix="VOICEVOX")
                 
-                print("VOICEVOXエンジンの起動がタイムアウトしました")
+                log_message("VOICEVOXエンジンの起動がタイムアウトしました", level="ERROR", prefix="VOICEVOX")
                 return False
             else:
-                print(f"VOICEVOXエンジン実行ファイルが見つかりません: {engine_path}")
+                log_message(f"VOICEVOXエンジン実行ファイルが見つかりません: {engine_path}", level="ERROR", prefix="VOICEVOX")
                 return False
         
         # Windows（将来的に対応）
         elif platform.system() == 'Windows':
             # Windowsでの起動方法（将来実装）
-            print("Windows環境でのVOICEVOX自動起動は現在サポートされていません")
+            log_message("Windows環境でのVOICEVOX自動起動は現在サポートされていません", level="WARN", prefix="VOICEVOX")
             return False
         
         else:
-            print(f"サポートされていないOS: {platform.system()}")
+            log_message(f"サポートされていないOS: {platform.system()}", level="ERROR", prefix="VOICEVOX")
             return False
         
     except Exception as e:
-        print(f"VOICEVOXエンジン起動エラー: {e}")
+        log_message(f"VOICEVOXエンジン起動エラー: {e}", level="ERROR", prefix="VOICEVOX")
+        import traceback
+        traceback.print_exc()
         return False
 
 def stop_voicevox_engine():
@@ -290,10 +347,56 @@ class SimpleScriptReader:
         if self.auto_start_voicevox.get() == 1:
             self.start_voicevox_if_needed()
     
+    def browse_voicevox_path(self):
+        """VOICEVOXアプリを選択するダイアログを表示"""
+        # macOSの場合はアプリバンドルを選択
+        if platform.system() == 'Darwin':
+            file_types = [("VOICEVOXアプリ", "*.app")]
+            initial_dir = "/Applications"
+        # Windowsの場合は実行ファイルを選択
+        elif platform.system() == 'Windows':
+            file_types = [("VOICEVOX実行ファイル", "*.exe")]
+            initial_dir = "C:\\Program Files"
+        else:
+            file_types = [("すべてのファイル", "*.*")]
+            initial_dir = "/"
+        
+        # ファイル選択ダイアログを表示
+        path = filedialog.askdirectory(
+            title="VOICEVOXアプリケーションを選択",
+            initialdir=initial_dir
+        )
+        
+        if path:
+            self.voicevox_path.set(path)
+            # 自動的に検証する
+            self.validate_and_save_voicevox_path()
+    
+    def validate_and_save_voicevox_path(self):
+        """入力されたVOICEVOXパスを検証して保存する"""
+        path = self.voicevox_path.get()
+        
+        if not path:
+            self.status_label.config(text="VOICEVOXパスが指定されていません")
+            return
+        
+        # パスを検証
+        if validate_voicevox_path(path):
+            self.status_label.config(text=f"VOICEVOXパスの検証に成功しました: {path}")
+            log_message(f"有効なVOICEVOXパスを設定: {path}", level="SUCCESS", prefix="VOICEVOX")
+            # インスタンス変数に保存
+            self.voicevox_path.set(path)
+        else:
+            self.status_label.config(text=f"無効なVOICEVOXパス: {path}")
+            log_message(f"VOICEVOXパスの検証に失敗: {path}", level="ERROR", prefix="VOICEVOX")
+    
     def start_voicevox_if_needed(self):
         """VOICEVOXエンジンが起動していなければ自動起動"""
         if not is_voicevox_engine_running():
-            if start_voicevox_engine():
+            # 指定されたパスがあれば使用
+            user_path = self.voicevox_path.get() if self.voicevox_path.get() else None
+            
+            if start_voicevox_engine(user_path):
                 self.status_label.config(text="VOICEVOXエンジンを自動起動しました")
                 # 起動に成功したらVOICEVOXエンジンを選択
                 self.root.after(2000, lambda: self.change_engine("voicevox"))
@@ -377,7 +480,7 @@ class SimpleScriptReader:
         self.stop_btn.pack(side=tk.LEFT, padx=5)
         
         # 音声読み込みボタン（手動読み込み用） - より目立たせる、ショートカットキー表示
-        self.load_audio_btn = Button(control_frame, text="音声読み込み (L) ⬇", command=self.start_audio_preload, 
+        self.load_audio_btn = Button(control_frame, text="音声読み込み (B) ⬇", command=self.start_audio_preload, 
                                   font=("Helvetica", 12, "bold"), bg=self.accent_blue, fg="black")
         self.load_audio_btn.pack(side=tk.LEFT, padx=8)
         
@@ -475,6 +578,34 @@ class SimpleScriptReader:
                                       bg=self.bg_color, fg=self.text_fg_color)
         self.speaker_info_label.pack(side=tk.LEFT, padx=5)
         
+        # VOICEVOX設定フレーム
+        voicevox_frame = Frame(self.root, bg=self.bg_color)
+        voicevox_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        # VOICEVOXパスラベル
+        voicevox_path_label = Label(voicevox_frame, text="VOICEVOXパス:", font=("Helvetica", 12),
+                                  bg=self.bg_color, fg=self.text_fg_color)
+        voicevox_path_label.pack(side=tk.LEFT, padx=5)
+        
+        # VOICEVOXパス入力フィールド
+        self.voicevox_path_entry = tk.Entry(voicevox_frame, textvariable=self.voicevox_path, 
+                                        font=("Helvetica", 12), width=30)
+        self.voicevox_path_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        # VOICEVOXパス選択ボタン
+        self.browse_voicevox_btn = Button(voicevox_frame, text="参照...", 
+                                      command=self.browse_voicevox_path,
+                                      font=("Helvetica", 10), 
+                                      bg=self.btn_bg, fg="black")
+        self.browse_voicevox_btn.pack(side=tk.LEFT, padx=2)
+        
+        # VOICEVOXパス検証ボタン
+        self.validate_voicevox_btn = Button(voicevox_frame, text="検証", 
+                                        command=self.validate_and_save_voicevox_path,
+                                        font=("Helvetica", 10), 
+                                        bg=self.accent_green, fg="black")
+        self.validate_voicevox_btn.pack(side=tk.LEFT, padx=2)
+        
         # VOICEVOX自動起動フレーム (新規追加)
         auto_frame = Frame(self.root, bg=self.bg_color)
         auto_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -529,8 +660,8 @@ class SimpleScriptReader:
         self.root.bind('<Up>', lambda event: self.increase_speed())
         self.root.bind('<Down>', lambda event: self.decrease_speed())
         # 音声読み込みショートカット
-        self.root.bind('l', lambda event: self.start_audio_preload())
-        self.root.bind('L', lambda event: self.start_audio_preload())
+        self.root.bind('b', lambda event: self.start_audio_preload())
+        self.root.bind('B', lambda event: self.start_audio_preload())
     
     def toggle_auto_start(self):
         """VOICEVOX自動起動オプションの切り替え"""
