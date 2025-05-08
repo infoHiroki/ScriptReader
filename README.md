@@ -11,8 +11,20 @@
   - Google Text-to-Speech (GTTSライブラリ使用)
   - VOICEVOX（高品質日本語音声合成エンジン）
 - VOICEVOXの話者選択機能（四国めたん、ずんだもん、春日部つむぎなど）
-- 読み上げ速度の調整
+- 読み上げ速度の調整（100〜660WPM）
 - キーボードショートカット対応
+
+## ディレクトリ構造
+
+```
+script_reader/
+├── script_reader.py     # メインアプリケーション
+├── README.md            # ドキュメント
+├── CLAUDE.md            # Claude用指示書
+└── Archive/             # アーカイブ資料
+    ├── VOICEVOX統合設計書.md
+    └── list_speakers.py
+```
 
 ## 必要条件
 
@@ -25,14 +37,21 @@
 
 ## セットアップ
 
-1. 必要なPythonライブラリをインストールします：
+1. リポジトリをクローンします：
+
+```bash
+git clone https://github.com/yourusername/script_reader.git
+cd script_reader
+```
+
+2. 必要なPythonライブラリをインストールします：
 
 ```bash
 pip install requests
 pip install gTTS  # オプション：Google TTSを使用する場合
 ```
 
-2. VOICEVOXをインストールします（オプション）：
+3. VOICEVOXをインストールします（オプション）：
    - [VOICEVOX公式サイト](https://voicevox.hiroshiba.jp/)からダウンロードしてインストールします
    - インストール後、VOICEVOXエディタを起動します（エンジンも同時に起動されます）
 
@@ -82,3 +101,11 @@ VOICEVOXの詳細については[公式サイト](https://voicevox.hiroshiba.jp/
 - VOICEVOXエンジンが起動していない場合、自動的にmacOS sayにフォールバックします
 - VOICEVOXの利用には、requestsライブラリが必要です
 - インターネット接続がない環境では、Google TTSは利用できません
+
+## 最近の更新
+
+- 音声再生プロセスのチェック間隔を短縮し、VOICEVOXでの複数行処理を改善
+- 改行間のポーズ時間を短縮し、音声読み上げの応答性を向上
+- VOICEVOXの最大読み上げ速度を660に変更し、速度設定を追加
+- VOICEVOXの音声再生処理を改善し、一時ファイルの管理を強化
+- VOICEVOX話者リストの更新と話者情報取得機能の追加
