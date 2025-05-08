@@ -716,6 +716,9 @@ class SimpleScriptReader:
         self.prev_btn.config(state=tk.NORMAL if self.current_slide > 0 else tk.DISABLED)
         self.next_btn.config(state=tk.NORMAL if self.current_slide < len(self.slides) - 1 else tk.DISABLED)
         
+        # 古いキャッシュを整理
+        self._clean_other_caches()
+        
         # 音声が既に読み込まれている場合はボタンの表示を更新
         current_idx = self.current_slide
         if current_idx in self.is_loaded and self.is_loaded[current_idx]:
@@ -727,14 +730,32 @@ class SimpleScriptReader:
     def next_slide(self):
         """次のスライドへ移動"""
         if self.current_slide < len(self.slides) - 1:
+            # 音声再生を確実に停止
             self.stop_speaking()
+            
+            # 現在のスライドがロード中の場合も処理をキャンセル
+            current_idx = self.current_slide
+            if current_idx in self.is_loading and self.is_loading[current_idx]:
+                self.is_loading[current_idx] = False
+                log_message(f"スライド {current_idx+1} の読み込みを中断しました", level="INFO", prefix="スライド移動")
+            
+            # 次のスライドに移動
             self.current_slide += 1
             self.show_slide()
             
     def prev_slide(self):
         """前のスライドへ移動"""
         if self.current_slide > 0:
+            # 音声再生を確実に停止
             self.stop_speaking()
+            
+            # 現在のスライドがロード中の場合も処理をキャンセル
+            current_idx = self.current_slide
+            if current_idx in self.is_loading and self.is_loading[current_idx]:
+                self.is_loading[current_idx] = False
+                log_message(f"スライド {current_idx+1} の読み込みを中断しました", level="INFO", prefix="スライド移動")
+            
+            # 前のスライドに移動
             self.current_slide -= 1
             self.show_slide()
             
@@ -812,8 +833,8 @@ class SimpleScriptReader:
             self.status_label.config(text="音声は読み込み済みです")
             log_message(f"スライド {current_idx+1}/{len(self.slides)} は既に読み込み済みです", 
                       level="INFO", prefix="音声読み込み")
-            # 読み込み済みの場合は再生ボタンの表示を更新
-            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶")
+            # 読み込み済みの場合は再生ボタンの表示を更新して有効化
+            self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶", state=tk.NORMAL)
             return
             
         # 読み込み中の場合はスキップ
@@ -841,6 +862,9 @@ class SimpleScriptReader:
         self.progress_var.set("⏳")
         # アニメーションを開始
         self._start_progress_animation(current_idx)
+        
+        # 読み込み中は再生ボタンを無効化
+        self.speak_btn.config(state=tk.DISABLED)
         
         # エンジン情報をログに出力
         log_message(f"スライド {current_idx+1}/{len(self.slides)} の音声読み込みを開始します", 
@@ -972,7 +996,7 @@ class SimpleScriptReader:
                 
                 self.status_label.config(text=success_msg)
                 self.progress_var.set("✅")  # 完了マーク
-                self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶")
+                self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生 ▶", state=tk.NORMAL)
                 # 数秒後に進捗表示を消す
                 self.root.after(3000, self._clear_progress_var_safe)
             else:
@@ -991,8 +1015,8 @@ class SimpleScriptReader:
                 # UI表示を更新
                 self.status_label.config(text=error_msg)
                 self.progress_var.set("❌")  # エラーマーク
-                # 再生ボタンを標準状態に
-                self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生")
+                # 再生ボタンを標準状態に戻して有効化
+                self.speak_btn.config(bg=self.accent_green, fg="black", text="音声再生", state=tk.NORMAL)
                 # 数秒後に進捗表示を消す
                 self.root.after(3000, self._clear_progress_var_safe)
         except Exception as e:
@@ -1041,6 +1065,37 @@ class SimpleScriptReader:
                 self.progress_var.set("🔄")  # 静的なアイコン
             except:
                 pass
+    
+    def _clean_other_caches(self):
+        """現在のスライド以外のキャッシュをすべて削除する"""
+        current_idx = self.current_slide
+        slides_to_clean = []
+        
+        # 削除対象のスライドを特定
+        for idx in list(self.audio_cache.keys()):
+            if idx != current_idx:
+                slides_to_clean.append(idx)
+        
+        # 削除処理
+        for idx in slides_to_clean:
+            if idx in self.audio_cache and os.path.exists(self.audio_cache[idx]):
+                try:
+                    # ファイルを削除
+                    os.unlink(self.audio_cache[idx])
+                    log_message(f"スライド {idx+1} のキャッシュを削除しました", 
+                              level="INFO", prefix="キャッシュ整理")
+                except Exception as e:
+                    log_message(f"キャッシュ削除エラー: {e}", level="ERROR", prefix="キャッシュ整理")
+            
+            # キャッシュ情報をリセット
+            self.audio_cache.pop(idx, None)
+            self.is_loaded.pop(idx, None)
+            self.is_loading.pop(idx, None)
+            
+        # 削除したスライド数をログに出力
+        if slides_to_clean:
+            log_message(f"{len(slides_to_clean)}個のキャッシュを整理しました", 
+                      level="INFO", prefix="キャッシュ整理")
     
     def _clear_progress_var_safe(self):
         """進捗表示を安全にクリアする（タイマーコールバック用）"""
@@ -1558,13 +1613,19 @@ class SimpleScriptReader:
         self.stop_speaking()
         
         # 音声キャッシュの削除
+        log_message("終了処理: 全てのキャッシュを削除しています", level="INFO", prefix="終了処理")
+        cache_count = 0
+        
         for cache_file in self.audio_cache.values():
             if os.path.exists(cache_file):
                 try:
                     os.unlink(cache_file)
-                    print(f"キャッシュファイルを削除しました: {cache_file}")
+                    cache_count += 1
+                    log_message(f"キャッシュファイルを削除しました: {cache_file}", level="DEBUG", prefix="終了処理")
                 except Exception as e:
-                    print(f"キャッシュファイル削除エラー: {e}")
+                    log_message(f"キャッシュファイル削除エラー: {e}", level="ERROR", prefix="終了処理")
+        
+        log_message(f"終了処理: {cache_count}個のキャッシュファイルを削除しました", level="INFO", prefix="終了処理")
         
         # VOICEVOXエンジンを終了（自動起動した場合のみ）
         if voicevox_process:
